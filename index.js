@@ -2,6 +2,7 @@ require('dotenv').config()
 const TelegramBot =  require('node-telegram-bot-api')
 
 const channels = {};
+let selectedChannels = [];
 
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
 const bot = new TelegramBot(apiKeyBot, {
@@ -36,6 +37,7 @@ bot.on('text', async msg => {
     }
 })
 
+// Добавление канала
 bot.on('message', async (msg) => {
     if (msg.forward_from_chat) {
         const channelId = msg.forward_from_chat.id;
@@ -48,6 +50,20 @@ bot.on('message', async (msg) => {
     console.log(msg);    
 });
 
+const generateChannelButtons = () => {
+    const channelButtons = Object.entries(channels).map(([id, title]) => {
+        return [{
+            text: `${title} ${selectedChannels.includes(id) ? '✅' : ''}`,
+            callback_data: id
+        }];
+    });
+
+    channelButtons.push([{ text: 'Отправить сообщение ✅', callback_data: 'send_message' }]);
+    channelButtons.push([{ text: 'Выбрать все каналы', callback_data: 'select_all' }]);
+
+    return channelButtons;
+}
+
 bot.onText(/\/channels/, async (msg) => {
     const chatId = msg.chat.id;
 
@@ -56,39 +72,59 @@ bot.onText(/\/channels/, async (msg) => {
         return;
     }
 
-    let channelList = "Список доступных каналов:\n";
-    Object.entries(channels).forEach(([id, title]) => {
-        channelList += `${title} (ID: ${id})\n`;
+    await bot.sendMessage(chatId, 'Выберите каналы для отправки:', {
+        reply_markup: {
+            inline_keyboard: generateChannelButtons()
+        }
     });
-
-    await bot.sendMessage(chatId, channelList);
 });
 
-bot.onText(/\/send (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const textToSend = match[1]; // Текст сообщения
+bot.on('callback_query', async (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const callbackData = callbackQuery.data;
 
-    if (Object.keys(channels).length === 0) {
-        await bot.sendMessage(chatId, 'Нет доступных каналов для отправки.');
-        return;
-    }
+    if (callbackData === 'send_message') {
+        // Если ни один канал не выбран, отправляем во все каналы
+        const channelsToSend = selectedChannels.length ? selectedChannels : Object.keys(channels);
+        await bot.sendMessage(chatId, `Введите сообщение для отправки в ${channelsToSend.length} канала(ов).`);
 
-    for (const channelId of Object.keys(channels)) {
-        try {
-            await bot.sendMessage(channelId, textToSend);
-        } catch (error) {
-            console.error(`Ошибка отправки в канал ${channelId}:`, error);
+        bot.once('text', async (msg) => {
+            const textToSend = msg.text;
+
+            for (const channelId of channelsToSend) {
+                try {
+                    await bot.sendMessage(channelId, textToSend);
+                } catch (error) {
+                    console.error(`Ошибка отправки в канал ${channelId}:`, error);
+                }
+            }
+
+            await bot.sendMessage(chatId, 'Сообщение успешно отправлено.');
+            selectedChannels = [];
+        });
+    } else if (callbackData === 'select_all') {
+        selectedChannels = Object.keys(channels);
+        await bot.sendMessage(chatId, 'Выбраны все каналы.');
+        bot.emit('channels', callbackQuery.message);
+    } else {
+        if (selectedChannels.includes(callbackData)) {
+            selectedChannels = selectedChannels.filter(id => id !== callbackData);
+        } else {
+            selectedChannels.push(callbackData);
         }
-    }
 
-    await bot.sendMessage(chatId, 'Сообщение отправлено во все каналы.');
+        await bot.editMessageReplyMarkup({
+            inline_keyboard: generateChannelButtons()
+        }, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id
+        });
+    }
 });
 
 const commands = [
     { command: "start", description: "Запуск бота" },
     { command: "channels", description: "Список каналов" },
-    { command: "send", description: "Отправить сообщение в канал" },
-    { command: "help", description: "Раздел помощи" },
 ]
 
 bot.setMyCommands(commands);

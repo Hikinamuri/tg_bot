@@ -3,6 +3,7 @@ const TelegramBot =  require('node-telegram-bot-api')
 
 const channels = {};
 let selectedChannels = [];
+let pendingMedia = [];
 
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
 const bot = new TelegramBot(apiKeyBot, {
@@ -27,7 +28,7 @@ bot.on('text', async msg => {
         const forwardFromChatId = msg.forward_origin?.chat?.id;
         const messageText = `${msg.text}\n<a href='t.me'>${msg.forward_origin?.chat?.title}</a>`
 
-        console.log(messageText, 'messageText')
+        // console.log(messageText, 'messageText')
         // forwardFromChatId ? await bot.sendMessage(forwardFromChatId, messageText, {
         //     parse_mode: "HTML"
         // }) : await bot.sendMessage(msg.chat.id, msg.text)
@@ -36,6 +37,36 @@ bot.on('text', async msg => {
         console.error(error);
     }
 })
+
+bot.on('photo', async (msg) => {
+    const chatId = msg.chat.id;
+
+    if (msg.forward_from_chat) {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        pendingMedia.push({
+            type: 'photo',
+            media: fileId
+        });
+        await bot.sendMessage(chatId, 'Фото добавлено.');
+    } else {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        pendingMedia.push({
+            type: 'photo',
+            media: fileId
+        });
+        await bot.sendMessage(chatId, 'Фото добавлено.');
+    }
+});
+
+// Аналогично обрабатываем видео
+bot.on('video', async (msg) => {
+    const fileId = msg.video.file_id;
+    pendingMedia.push({
+        type: 'video',
+        media: fileId
+    });
+    await bot.sendMessage(msg.chat.id, 'Видео добавлено.');
+});
 
 // Добавление канала
 bot.on('message', async (msg) => {
@@ -47,7 +78,6 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен.`);
     }
-    console.log(msg);    
 });
 
 const generateChannelButtons = () => {
@@ -84,29 +114,113 @@ bot.on('callback_query', async (callbackQuery) => {
     const callbackData = callbackQuery.data;
 
     if (callbackData === 'send_message') {
-        // Если ни один канал не выбран, отправляем во все каналы
         const channelsToSend = selectedChannels.length ? selectedChannels : Object.keys(channels);
-        await bot.sendMessage(chatId, `Введите сообщение для отправки в ${channelsToSend.length} канала(ов).`);
+        if (channelsToSend.length === 0) {
+            await bot.sendMessage(chatId, 'Нет выбранных каналов.');
+            return;
+        }
 
-        bot.once('text', async (msg) => {
-            const textToSend = msg.text;
+        await bot.sendMessage(chatId, 'Введите текст для рассылки и прикрепите медиа (фото или видео).');
 
-            for (const channelId of channelsToSend) {
-                try {
-                    await bot.sendMessage(channelId, textToSend);
-                } catch (error) {
-                    console.error(`Ошибка отправки в канал ${channelId}:`, error);
+        let mediaGroup = [];
+        let isGroupProcessing = false;
+        let mediaTimeout; // Таймаут для завершения обработки медиа-группы
+
+        const finalizeMediaGroup = async () => {
+            if (mediaGroup.length > 0) {
+                for (const channelId of channelsToSend) {
+                    try {
+                        await bot.sendMediaGroup(channelId, mediaGroup);
+                    } catch (error) {
+                        console.error(`Ошибка отправки в канал ${channelId}:`, error);
+                    }
                 }
+                await bot.sendMessage(chatId, 'Медиа-группа успешно отправлена.');
+                mediaGroup = [];
+                isGroupProcessing = false;
             }
+            bot.removeListener('message', handleMediaMessage);
+        };
 
-            await bot.sendMessage(chatId, 'Сообщение успешно отправлено.');
-            selectedChannels = [];
-        });
+        const handleMediaMessage = async (msg) => {
+            const textToSend = msg.text || msg.caption || '';
+
+            if (msg.media_group_id) {
+                isGroupProcessing = true;
+
+                // Очищаем предыдущий таймаут
+                clearTimeout(mediaTimeout);
+
+                // Проверяем наличие фото
+                if (msg.photo) {
+                    mediaGroup.push({
+                        type: 'photo',
+                        media: msg.photo[msg.photo.length - 1].file_id, // Наивысшее качество
+                        caption: mediaGroup.length === 0 ? textToSend : undefined // Подпись только к первому медиа
+                    });
+                }
+
+                // Проверяем наличие видео
+                if (msg.video) {
+                    mediaGroup.push({
+                        type: 'video',
+                        media: msg.video.file_id,
+                        caption: mediaGroup.length === 0 ? textToSend : undefined
+                    });
+                }
+
+                mediaTimeout = setTimeout(finalizeMediaGroup, 2000);
+            } else if (!msg.media_group_id && isGroupProcessing) {
+                clearTimeout(mediaTimeout);
+                await finalizeMediaGroup();
+            } else if (!isGroupProcessing) {
+                let mediaToSend = [];
+
+                if (msg.photo) {
+                    mediaToSend.push({
+                        type: 'photo',
+                        media: msg.photo[msg.photo.length - 1].file_id,
+                        caption: textToSend
+                    });
+                }
+
+                if (msg.video) {
+                    mediaToSend.push({
+                        type: 'video',
+                        media: msg.video.file_id,
+                        caption: textToSend
+                    });
+                }
+
+                if (mediaToSend.length === 0) {
+                    for (const channelId of channelsToSend) {
+                        try {
+                            await bot.sendMessage(channelId, textToSend);
+                        } catch (error) {
+                            console.error(`Ошибка отправки в канал ${channelId}:`, error);
+                        }
+                    }
+                } else {
+                    for (const channelId of channelsToSend) {
+                        try {
+                            await bot.sendMediaGroup(channelId, mediaToSend);
+                        } catch (error) {
+                            console.error(`Ошибка отправки в канал ${channelId}:`, error);
+                        }
+                    }
+                }
+                await bot.sendMessage(chatId, 'Сообщение успешно отправлено.');
+                bot.removeListener('message', handleMediaMessage);
+            }
+        };
+
+        bot.on('message', handleMediaMessage);
     } else if (callbackData === 'select_all') {
         selectedChannels = Object.keys(channels);
         await bot.sendMessage(chatId, 'Выбраны все каналы.');
         bot.emit('channels', callbackQuery.message);
     } else {
+        // Логика выбора каналов
         if (selectedChannels.includes(callbackData)) {
             selectedChannels = selectedChannels.filter(id => id !== callbackData);
         } else {
@@ -121,6 +235,7 @@ bot.on('callback_query', async (callbackQuery) => {
         });
     }
 });
+
 
 const commands = [
     { command: "start", description: "Запуск бота" },

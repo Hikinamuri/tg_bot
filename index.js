@@ -5,6 +5,7 @@ const channels = {};
 let selectedChannels = [];
 let groups = {};
 let selectedChannels1 = [];
+let selectedChannelsForRemoval = [];
 
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
 const bot = new TelegramBot(apiKeyBot, {
@@ -39,7 +40,6 @@ bot.on('text', async msg => {
     }
 })
 
-// Добавление канала
 bot.on('message', async (msg) => {
     if (msg.forward_from_chat) {
         const channelId = msg.forward_from_chat.id;
@@ -52,7 +52,6 @@ bot.on('message', async (msg) => {
     console.log(msg);    
 });
 
-// Генерация кнопок для выбора каналов
 const generateChannelButtons = () => {
     const channelButtons = Object.entries(channels).map(([id, title]) => {
         return [{
@@ -70,7 +69,7 @@ const generateChannelButtons = () => {
 const generateGroupChannelButtons = () => {
     const channelButton = Object.entries(channels).map(([id, title]) => {
         return [{
-            text: `${title} ${selectedChannels1.includes(title) ? '✅' : ''}`,
+            text: `${title} ${selectedChannels1.includes(id) ? '✅' : ''}`,
             callback_data: `group_${id}`
         }];
     });
@@ -78,16 +77,54 @@ const generateGroupChannelButtons = () => {
     return channelButton;
 };
 
+
 const generateGroupButtons = () => {
     return Object.entries(groups).map(([name, channels]) => {
         return [{
             text: `${name} (${channels.length})`,
-            callback_data: `view_${name}` // Уникальный callback_data для каждой группы
+            callback_data: `view_${name}` 
         }];
     });
 };
 
-// Основной обработчик для callback_query
+const generateAddChannelButtonsForGroup = (groupName) => {
+    return Object.entries(channels).map(([id, title]) => {
+        return [{
+            text: `${title} ${selectedChannels1.includes(id) ? '✅' : ''}`, 
+            callback_data: `select_channel_${id}`
+        }];
+    }).concat([
+        [{ text: 'Добавить выбранные каналы в группу', callback_data: `confirm_add_to_group_${groupName}` }]
+    ]);
+};
+
+const generateRemoveChannelButtonsForGroup = (groupName) => {
+
+    const channelIdsInGroup = groups[groupName] || [];
+
+    return channelIdsInGroup.map((channelId) => {
+        const title = channels[channelId]; 
+
+        if (!title) {
+            console.warn(`Канал с ID ${channelId} не найден в channels.`);
+            return null; 
+        }
+
+        const isSelected = selectedChannelsForRemoval.includes(channelId);
+
+        return [{
+            text: `${title} ${isSelected ? '✅' : ''}`,
+            callback_data: `select_remove_channel_${channelId}` 
+        }];
+    }).filter(Boolean) 
+    .concat([
+        [{ text: 'Подтвердить удаление выбранных каналов', callback_data: `confirm_remove_from_group_${groupName}` }]
+    ]);
+};
+
+
+
+
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const data = query.data;
@@ -111,7 +148,6 @@ bot.on('callback_query', async (query) => {
             return;
         }
 
-        // Логика для выбора всех каналов
         if (data === 'select_all') {
             selectedChannels = Object.keys(channels);
             await bot.sendMessage(chatId, 'Выбраны все каналы.');
@@ -124,7 +160,6 @@ bot.on('callback_query', async (query) => {
             return;
         }
 
-        // Выбор конкретного канала
         if (data.startsWith('channel_')) {
             const channelId = data.split('_')[1];
             if (selectedChannels.includes(channelId)) {
@@ -142,107 +177,397 @@ bot.on('callback_query', async (query) => {
             return;
         }
 
-        // Логика для создания группы
         if (data === 'create_group') {
-            selectedChannels1 = [];
+            selectedChannels1 = []; 
             await bot.editMessageText('Выберите каналы для новой группы:', {
                 chat_id: chatId,
                 message_id: query.message.message_id,
                 reply_markup: {
-                    inline_keyboard: generateGroupChannelButtons()
+                    inline_keyboard: [
+                        ...generateGroupChannelButtons(), 
+                        [
+                            { text: 'Главное меню', callback_data: 'main_menu' }
+                        ]
+                    ]
                 }
             });
             return;
         }
-
-        // Добавление канала в группу
-            if (data.startsWith('group_')) {
-                const channelId = data.split('_')[1]; // Извлекаем идентификатор канала
-                const selectedChannel = channels[channelId]; // Получаем название канала
-
-                // Проверяем, есть ли уже этот канал в выбранной группе
-                if (!selectedChannels1.includes(selectedChannel)) {
-                    selectedChannels1.push(selectedChannel); // Добавляем канал в список
-                    await bot.editMessageText(`Канал "${selectedChannel}" добавлен в группу.\n\nВыбранные каналы: ${selectedChannels1.join(', ')}`, {
-                        chat_id: chatId,
-                        message_id: query.message.message_id,
-                        reply_markup: {
-                            inline_keyboard: generateGroupChannelButtons() // Обновляем кнопки
-                        }
-                    });
-                } else {
-                    // Сообщение об ошибке, если канал уже был добавлен
-                    await bot.sendMessage(chatId, `Ошибка: Канал "${selectedChannel}" уже добавлен в группу.`);
-                }
-                return;
+        
+        if (data.startsWith('group_')) {
+            const channelId = data.split('_')[1]; 
+            const selectedChannel = channels[channelId];
+        
+            if (selectedChannels1.includes(channelId)) { 
+                selectedChannels1 = selectedChannels1.filter(id => id !== channelId); 
+                await bot.editMessageText(`Канал "${selectedChannel}" удалён из группы.\n\nВыбранные каналы: ${selectedChannels1.length > 0 ? selectedChannels1.map(id => channels[id]).join(', ') : 'Нет выбранных каналов'}`, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            ...generateGroupChannelButtons(),
+                            [
+                                { text: 'Главное меню', callback_data: 'main_menu' } 
+                            ]
+                        ]
+                    }
+                });
+            } else {
+                selectedChannels1.push(channelId);
+                await bot.editMessageText(`Канал "${selectedChannel}" добавлен в группу.\n\nВыбранные каналы: ${selectedChannels1.map(id => channels[id]).join(', ')}`, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            ...generateGroupChannelButtons(),
+                            [
+                                { text: 'Главное меню', callback_data: 'main_menu' }
+                            ]
+                        ]
+                    }
+                });
             }
-
-        // Подтверждение создания группы
-        if (data === 'confirm_create_group') {
-            await bot.sendMessage(chatId, 'Введите название для группы:');
-            bot.once('text', async (msg) => {
-                const groupName = msg.text;
-                groups[groupName] = selectedChannels1;
-                await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: ${selectedChannels1.join(', ')}`);
-                selectedChannels1 = [];
-            });
             return;
         }
-
+        
+        if (data === 'confirm_create_group') { 
+            await bot.editMessageText('Введите название для группы:', {
+                chat_id: chatId,
+                message_id: query.message.message_id
+            });
+            
+            bot.once('text', async (msg) => {
+                const groupName = msg.text.trim();
+                if (!groupName || groups[groupName]) {
+                    await bot.editMessageText('Название группы недопустимо или уже существует. Попробуйте снова.', {
+                        chat_id: chatId,
+                        message_id: query.message.message_id
+                    });                 
+                    return;
+                }
+                
+                if (selectedChannels1 && selectedChannels1.length > 0) {
+                    groups[groupName] = selectedChannels1;
+                    await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: ${selectedChannels1.map(id => channels[id]).join(', ')}`, {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Просмотреть группы', callback_data: 'view_groups' },
+                                    { text: 'Создать еще группу', callback_data: 'create_group' } 
+                                ]
+                            ]
+                        }
+                    });           
+                    selectedChannels1 = [];
+        
+                } else {
+                    await bot.sendMessage(chatId, 'Ошибка: каналы не выбраны.');
+                }
+            });
+            return;
+        }        
+        
         if (data === 'view_groups') {
-            if (Object.keys(groups).length === 0) {
-                await bot.sendMessage(chatId, 'Пока нет доступных групп.');
+            if (Object.keys(groups).length === 0) {                
+                await bot.editMessageText('Пока нет доступных групп.', {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Главное меню', callback_data: 'main_menu' }
+                            ]
+                        ]
+                    }
+                });
                 return;
             }
     
-            // Отображаем список существующих групп
-            await bot.sendMessage(chatId, 'Выберите группу:', {
+            await bot.editMessageText('Выберите группу:', {
+                chat_id: chatId,
+                message_id: query.message.message_id,
                 reply_markup: {
-                    inline_keyboard: generateGroupButtons() // Генерация кнопок для групп
+                    inline_keyboard: [
+                        ...generateGroupButtons(), 
+                        [
+                            { text: 'Главное меню', callback_data: 'main_menu' }
+                        ]
+                    ]
+                }
+            });            
+            return;
+        }
+        if (data.startsWith('view_')) {
+            const groupName = data.split('_')[1]; 
+            const channelsInGroup = groups[groupName];
+        
+            if (channelsInGroup && channelsInGroup.length > 0) {
+                const channelNames = channelsInGroup.map(id => channels[id]).filter(Boolean);
+        
+                await bot.editMessageText(`Группа "${groupName}" включает следующие каналы:\n${channelNames.join(', ')}`, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Добавить канал', callback_data: `add_channel_to_group_${groupName}` },
+                                { text: 'Удалить канал', callback_data: `remove_channel_from_group_${groupName}` }
+                            ],
+                            [
+                                { text: 'Изменить название группы', callback_data: `edit_group_${groupName}` },
+                                { text: 'Удалить группу', callback_data: `delete_group_${groupName}` }
+                            ],
+                            [
+                                { text: 'Главное меню', callback_data: 'main_menu' }
+                            ],
+                            [
+                                { text: 'Назад к группам', callback_data: 'view_groups' }
+                            ]
+                        ]
+                    }
+                });
+            } else {
+                await bot.editMessageText(`Группа "${groupName}" пуста или не существует.`, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Главное меню', callback_data: 'main_menu' }
+                            ]
+                        ]
+                    }
+                });
+            }          
+        }
+
+        if (data.startsWith('add_channel_to_group_')) {
+            const groupName = data.split('_').pop();
+            selectedChannels1 = []; 
+
+            await bot.editMessageText( `Добавляем каналы в группу "${groupName}". Выберите каналы:`, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateAddChannelButtonsForGroup(groupName)
                 }
             });
             return;
         }
-if (data.startsWith('view_')) {
-    const groupName = data.split('_')[2]; // Извлекаем имя группы после "group_view_"
-    const channelsInGroup = groups[groupName]; // Получаем каналы для выбранной группы
 
-    if (channelsInGroup && channelsInGroup.length > 0) {
-        await bot.editMessageText(`Группа "${groupName}" включает следующие каналы:\n${channelsInGroup.join(', ')}`, {
+        if (data.startsWith('select_channel_')) {
+            const channelId = data.split('_')[2]; 
+            if (selectedChannels1.includes(channelId)) {
+                selectedChannels1 = selectedChannels1.filter(id => id !== channelId); 
+            } else {
+                selectedChannels1.push(channelId); 
+            }
+        
+            await bot.editMessageReplyMarkup({
+                inline_keyboard: generateAddChannelButtonsForGroup(query.message.text.split('"')[1])
+            }, {
+                chat_id: chatId,
+                message_id: query.message.message_id
+            });
+            return;
+        }
+        
+        if (data.startsWith('confirm_add_to_group_')) {
+            const groupName = data.split('_').pop(); 
+            if (selectedChannels1.length > 0) {
+                const channelNames = selectedChannels1.map(id => channels[id]); 
+                groups[groupName] = [...(groups[groupName] || []), ...channelNames]; 
+                await bot.editMessageText(`Каналы ${channelNames.join(', ')} добавлены в группу "${groupName}".`, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Назад к группам', callback_data: 'view_groups' }
+                            ]
+                        ]
+                    }
+                });
+                                 
+                selectedChannels1 = []; 
+            } else {
+                await bot.editMessageText('Ошибка: не выбраны каналы для добавления.', {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Назад к группам', callback_data: 'view_groups' }
+                            ]
+                        ]
+                    }
+                });
+            }
+            return;
+        }
+        
+            if (data.startsWith('remove_channel_from_group_')) {
+                const groupName = data.split('_').pop();
+                selectedChannelsForRemoval = []; 
+
+                await bot.editMessageText(`Удаляем каналы из группы "${groupName}". Выберите каналы:`, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: generateRemoveChannelButtonsForGroup(groupName) 
+                    }
+                });
+                return;
+            }
+
+            if (data.startsWith('select_remove_channel_')) {
+                const channelId = data.split('_')[3];
+
+                if (selectedChannelsForRemoval.includes(channelId)) {
+                    selectedChannelsForRemoval = selectedChannelsForRemoval.filter(id => id !== channelId); 
+                } else {
+                    selectedChannelsForRemoval.push(channelId);
+                }
+
+                await bot.editMessageReplyMarkup({
+                    inline_keyboard: generateRemoveChannelButtonsForGroup(query.message.text.split('"')[1])
+                }, {
+                    chat_id: chatId,
+                    message_id: query.message.message_id
+                });
+                return;
+            }
+
+            if (data.startsWith('confirm_remove_from_group_')) {
+                const groupName = data.split('_').pop();
+
+                if (selectedChannelsForRemoval.length > 0) {
+                    const channelNames = selectedChannelsForRemoval.map(id => channels[id]);
+                    groups[groupName] = groups[groupName].filter(id => !selectedChannelsForRemoval.includes(id));
+                    await bot.editMessageText(`Каналы ${channelNames.join(', ')} удалены из группы "${groupName}".`, {
+                    chat_id: chatId,
+                                message_id: query.message.message_id,
+                                reply_markup: {
+                                    inline_keyboard: [
+                                        [
+                                            { text: 'Назад к группам', callback_data: 'view_groups' }
+                                        ]
+                                    ]
+                                }
+                            });
+                    selectedChannelsForRemoval = [];
+                } 
+                else {
+                    await bot.editMessageText( 'Ошибка: не выбраны каналы для удаления.', {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Назад к группам', callback_data: 'view_groups' }
+                                ]
+                            ]
+                        }
+                    });
+                }
+            return;
+        }
+  
+        if (data.startsWith('edit_group_')) {
+            const groupName = data.split('_').pop();
+            await bot.editMessageText(`Введите новое название для группы "${groupName}":`, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+            });
+            
+            bot.once('text', async (msg) => {
+                const newGroupName = msg.text;
+                if (groups[groupName]) {
+                    groups[newGroupName] = groups[groupName]; 
+                    delete groups[groupName];
+                    await bot.sendMessage(chatId, `Название группы изменено на "${newGroupName}".`,{
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Назад к группам', callback_data: 'view_groups' }
+                                ]
+                            ]
+                        }
+                    });
+                } 
+                
+                else {
+                    await bot.editMessageText(`Группа "${groupName}" не найдена.`, {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Назад к группам', callback_data: 'view_groups' }
+                                ]
+                            ]
+                        }
+                    });
+                }
+            });
+        }
+    
+        if (data.startsWith('delete_group_')) {
+            const groupName = data.split('_').pop();
+            if (groups[groupName]) {
+                delete groups[groupName];
+                await bot.editMessageText(`Группа "${groupName}" была удалена.`,{
+                    chat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Назад к группам', callback_data: 'view_groups' }
+                            ]
+                        ]
+                    }
+                });
+
+            } else {
+                await bot.editMessageText(`Группа "${groupName}" не найдена.`,{
+                    hat_id: chatId,
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Назад к группам', callback_data: 'view_groups' }
+                            ]
+                        ]
+                    }
+                });
+            }
+        }
+    } 
+
+    catch (error) {
+        console.error('Ошибка в обработке callback_query:', error);
+        await bot.editMessageText('Произошла ошибка. Пожалуйста, попробуйте еще раз.',{
+            chat_id: chatId,
+            message_id: query.message.message_id,
+        });
+    }
+
+    if (data === 'main_menu') {
+        const chatId = query.message.chat.id; 
+        await bot.editMessageText('Что вы хотите сделать:', {
             chat_id: chatId,
             message_id: query.message.message_id,
             reply_markup: {
                 inline_keyboard: [
-                    [
-                        { text: 'Добавить канал', callback_data: `add_channel_to_group_${groupName}` },
-                        { text: 'Удалить канал', callback_data: `remove_channel_from_group_${groupName}` }
-                    ],
-                    [
-                        { text: 'Изменить название группы', callback_data: `edit_group_${groupName}` },
-                        { text: 'Удалить группу', callback_data: `delete_group_${groupName}` }
-                    ]
+                    [{ text: 'Создать новую группу', callback_data: 'create_group' }],
+                    [{ text: 'Посмотреть существующие группы', callback_data: 'view_groups' }]
                 ]
             }
         });
-    } else {
-        await bot.editMessageText(`Группа "${groupName}" пуста.`, {
-            chat_id: chatId,
-            message_id: query.message.message_id
-        });
-    }
-    return;
-}
-
-    } catch (error) {
-        console.error('Ошибка в обработке callback_query:', error);
-        await bot.sendMessage(chatId, 'Произошла ошибка. Пожалуйста, попробуйте еще раз.');
+        return;
     }
 });
 
-
-
-
-// Уникальные кнопки для команды /channels
 bot.onText(/\/channels/, async (msg) => {
     const chatId = msg.chat.id;
 
@@ -258,7 +583,6 @@ bot.onText(/\/channels/, async (msg) => {
     });
 });
 
-// Уникальные кнопки для команды /groups
 bot.onText(/\/groups/, async (msg) => {
     const chatId = msg.chat.id;
     const sentMessage = await bot.sendMessage(chatId, 'Что вы хотите сделать:', {
@@ -271,9 +595,6 @@ bot.onText(/\/groups/, async (msg) => {
     });
 });
 
-
-
-// Команды для бота
 const commands = [
     { command: "start", description: "Запуск бота" },
     { command: "channels", description: "Список каналов" },

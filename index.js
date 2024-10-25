@@ -153,9 +153,10 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
     }
 
     const selectAllButton = [{
-    text: toggleChannels.length === channelIdsInGroup.length ? 'Убрать все каналы' : 'Выбрать все каналы',
-    callback_data: `select_all_channels_${groupName}_${channelIdsInGroup.join(',')}`
-}];
+        text: toggleChannels.length === channelIdsInGroup.length ? 'Убрать все каналы' : 'Выбрать все каналы',
+        callback_data: `select_all_channels_${groupName}_${toggleChannels.length === channelIdsInGroup.length ? 'deselect' : 'select'}_${currentPage}`
+    }];
+    
 
     return [
         ...channelButtons,
@@ -166,6 +167,7 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
         [{ text: 'Главное меню', callback_data: 'main_menu' }]
     ];
 };
+
 
 const generateAddChannelButtonsForGroup = (groupName, currentPage = 1) => {
     const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
@@ -198,7 +200,7 @@ const generateAddChannelButtonsForGroup = (groupName, currentPage = 1) => {
         ...channelButtons,
         [{ text: 'Добавить выбранные каналы в группу', callback_data: `confirm_add_to_group_${groupName}` }],
         navigationButtons.length > 0 ? navigationButtons : [],
-        [{ text: 'Назад к группам', callback_data: 'view_groups' }]
+        [{ text: 'Назад к настройкам группы', callback_data: `settings_group_${groupName}` }]
     ];
 };
 
@@ -238,7 +240,7 @@ const generateRemoveChannelButtonsForGroup = (groupName, currentPage = 1) => {
         ...channelButtons,
         [{ text: 'Подтвердить удаление выбранных каналов', callback_data: `confirm_remove_from_group_${groupName}` }],
         ...navigationButtons,
-        [{ text: 'Назад к группам', callback_data: 'view_groups' }]
+        [{ text: 'Назад к настройкам группы', callback_data: `settings_group_${groupName}` }]
     ];
 };
 
@@ -501,18 +503,19 @@ bot.on('callback_query', async (query) => {
         
         if (data.startsWith('toggle_channel_')) {
             const parts = data.split('_');
-            const channelId = parts[2]; 
-            const groupName = parts[3]; 
+            const channelId = parts[2];
+            const groupName = parts[3];
+            const currentPage = parseInt(parts[4], 10) || 1; 
         
             const isSelected = toggleChannels.includes(channelId);
-    
+        
             if (isSelected) {
-                toggleChannels = toggleChannels.filter(id => id !== channelId); 
+                toggleChannels = toggleChannels.filter(id => id !== channelId);
             } else {
-                toggleChannels.push(channelId); 
+                toggleChannels.push(channelId);
             }
         
-            const newMarkup = generateSelectableChannelButtonsForGroup(groupName);
+            const newMarkup = generateSelectableChannelButtonsForGroup(groupName, currentPage); 
         
             const currentMessage = query.message.reply_markup;
             if (JSON.stringify(currentMessage.inline_keyboard) !== JSON.stringify(newMarkup)) {
@@ -528,31 +531,21 @@ bot.on('callback_query', async (query) => {
         
         if (data.startsWith('select_all_channels_')) {
             const parts = data.split('_');
-            const groupName = parts[3]; 
-            const channelIdsInGroup = parts[4].split(','); 
+            const groupName = parts[3];
+            const action = parts[4];
+            const currentPage = parseInt(parts[5], 10) || 1;
         
-            console.log(`Исходные toggleChannels: ${JSON.stringify(toggleChannels)}`);
-            console.log(`Название группы: ${groupName}`);
-            console.log(`Идентификаторы каналов в группе: ${JSON.stringify(channelIdsInGroup)}`);
-        
-            if (toggleChannels.length === channelIdsInGroup.length) {
-                toggleChannels = []; 
+            if (action === 'select') {
+                toggleChannels = groups[groupName] ? [...groups[groupName]] : [];
             } else {
-                channelIdsInGroup.forEach(channelId => {
-                    if (!toggleChannels.includes(channelId)) {
-                        toggleChannels.push(channelId);
-                    }
-                });
+                toggleChannels = [];
             }
         
-            console.log(`Текущий выбор каналов после обработки: ${JSON.stringify(toggleChannels)}`);
+            const newMarkup = generateSelectableChannelButtonsForGroup(groupName, currentPage);
         
-            const newMarkup = await generateSelectableChannelButtonsForGroup(groupName);
-        
-            const currentMarkup = query.message.reply_markup.inline_keyboard;
-        
+            const currentMessage = query.message.reply_markup;
+            const currentMarkupString = JSON.stringify(currentMessage.inline_keyboard);
             const newMarkupString = JSON.stringify(newMarkup);
-            const currentMarkupString = JSON.stringify(currentMarkup);
         
             if (currentMarkupString !== newMarkupString) {
                 await bot.editMessageReplyMarkup({
@@ -564,6 +557,8 @@ bot.on('callback_query', async (query) => {
             }
             return;
         }
+        
+        
 
         if (data.startsWith('add_channel_to_group_')) {
             const groupName = data.split('_').pop();
@@ -825,7 +820,6 @@ bot.on('callback_query', async (query) => {
             });
         }
         
-    
         if (data.startsWith('delete_group_')) {
             const groupName = data.split('_').pop();
             if (groups[groupName]) {

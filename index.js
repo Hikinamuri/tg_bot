@@ -7,6 +7,7 @@ let groups = {};
 let selectedChannels1 = [];
 let selectedChannelsForRemoval = [];
 let toggleChannels = [];
+const ITEMS_PER_PAGE = 1; 
 
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
 const bot = new TelegramBot(apiKeyBot, {
@@ -67,23 +68,44 @@ const generateChannelButtons = () => {
     return channelButtons;
 }
 
-const generateGroupChannelButtons = () => {
+const generateGroupChannelButtons = (currentPage = 1) => {
     const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
         return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
     });
 
-    const channelButton = sortedChannels.map(([id, title]) => {
+    const totalChannels = sortedChannels.length;
+    const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+
+    const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, totalChannels);
+    const channelsOnPage = sortedChannels.slice(startIdx, endIdx);
+
+    const channelButtons = channelsOnPage.map(([id, title]) => {
         return [{
             text: `${title} ${selectedChannels1.includes(id) ? '✅' : '⬜️'}`,
-            callback_data: `group_${id}`
+            callback_data: `group_${id}_${currentPage}`
         }];
     });
 
-    channelButton.push([{ text: 'Создать группу', callback_data: 'confirm_create_group' }]);
+    const navigationButtons = [];
+    if (currentPage > 1) {
+        navigationButtons.push({ text: '⬅️ Предыдущая', callback_data: `view_page_${currentPage - 1}` });
+    }
+    if (currentPage < totalPages) {
+        navigationButtons.push({ text: 'Следующая ➡️', callback_data: `view_page_${currentPage + 1}` });
+    }
 
-    return channelButton;
+    const createGroupButton = [{ text: 'Создать группу', callback_data: 'confirm_create_group' }];
+    
+    const mainMenuButton = [{ text: 'Главное меню', callback_data: 'main_menu' }];
+
+    return [
+        ...channelButtons,
+        navigationButtons.length > 0 ? navigationButtons : [],
+        createGroupButton,
+        mainMenuButton
+    ];
 };
-
 
 const generateGroupButtons = () => {
     const sortedGroups = Object.entries(groups).sort(([nameA], [nameB]) => {
@@ -98,12 +120,8 @@ const generateGroupButtons = () => {
     });
 };
 
-
-const ITEMS_PER_PAGE = 2; 
-
 const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) => {
     const channelIdsInGroup = (groups[groupName] || []).slice();
-
 
     channelIdsInGroup.sort((a, b) => {
         const titleA = channels[a]?.toLowerCase() || '';
@@ -136,59 +154,93 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
 
     const selectAllButton = [{
     text: toggleChannels.length === channelIdsInGroup.length ? 'Убрать все каналы' : 'Выбрать все каналы',
-    callback_data: `select_all_channels_${groupName}_${channelIdsInGroup.join(',')}` // Передаем только идентификаторы
+    callback_data: `select_all_channels_${groupName}_${channelIdsInGroup.join(',')}`
 }];
-
-    
-    
 
     return [
         ...channelButtons,
         navigationButtons.length > 0 ? navigationButtons : [],
         [{ text: 'Настройки группы', callback_data: `settings_group_${groupName}` }],
         selectAllButton,
+        [{ text: 'Назад к группам', callback_data: 'view_groups' }],
         [{ text: 'Главное меню', callback_data: 'main_menu' }]
     ];
 };
 
-const generateAddChannelButtonsForGroup = (groupName) => {
-    const sortedChannels = Object.entries(channels).sort(([idA, titleA], [idB, titleB]) => {
+const generateAddChannelButtonsForGroup = (groupName, currentPage = 1) => {
+    const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
         return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
     });
 
-    return sortedChannels.map(([id, title]) => {
+    const totalChannels = sortedChannels.length;
+    const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+
+    const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, totalChannels);
+    const channelsOnPage = sortedChannels.slice(startIdx, endIdx);
+
+    const channelButtons = channelsOnPage.map(([id, title]) => {
         return [{
-            text: `${title} ${selectedChannels1.includes(id) ? '✅' : '⬜️'}`, 
-            callback_data: `select_channel_${id}`
+            text: `${title} ${selectedChannels1.includes(id) ? '✅' : '⬜️'}`,
+            callback_data: `select_channel_${id}_${currentPage}`
         }];
-    }).concat([
-        [{ text: 'Добавить выбранные каналы в группу', callback_data: `confirm_add_to_group_${groupName}` }]
-    ]);
+    });
+
+    const navigationButtons = [];
+    if (currentPage > 1) {
+        navigationButtons.push({ text: '⬅️ Предыдущая', callback_data: `add_channel_page_${groupName}_${currentPage - 1}` });
+    }
+    if (currentPage < totalPages) {
+        navigationButtons.push({ text: 'Следующая ➡️', callback_data: `add_channel_page_${groupName}_${currentPage + 1}` });
+    }
+
+    return [
+        ...channelButtons,
+        [{ text: 'Добавить выбранные каналы в группу', callback_data: `confirm_add_to_group_${groupName}` }],
+        navigationButtons.length > 0 ? navigationButtons : [],
+        [{ text: 'Назад к группам', callback_data: 'view_groups' }]
+    ];
 };
 
-
-const generateRemoveChannelButtonsForGroup = (groupName) => {
+const generateRemoveChannelButtonsForGroup = (groupName, currentPage = 1) => {
     const channelIdsInGroup = groups[groupName] || [];
-
     const sortedChannelIds = channelIdsInGroup.sort((a, b) => {
         const titleA = channels[a].toLowerCase();
         const titleB = channels[b].toLowerCase();
         return titleA.localeCompare(titleB);
     });
 
-    return sortedChannelIds.map((channelId) => {
+    const totalChannels = sortedChannelIds.length; 
+    const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+
+    const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, totalChannels);
+    const channelsOnPage = sortedChannelIds.slice(startIdx, endIdx);
+
+    const channelButtons = channelsOnPage.map((channelId) => {
         const title = channels[channelId]; 
         const isSelected = selectedChannelsForRemoval.includes(channelId);
         return [{
             text: `${title} ${isSelected ? '✅' : '⬜️'}`,
-            callback_data: `select_remove_channel_${channelId}` 
+            callback_data: `select_remove_channel_${channelId}_${currentPage}`
         }];
-    })
-    .concat([
-        [{ text: 'Подтвердить удаление выбранных каналов', callback_data: `confirm_remove_from_group_${groupName}` }]
-    ]);
-};
+    });
 
+    const navigationButtons = [];
+    if (currentPage > 1) {
+        navigationButtons.push([{ text: '⬅️ Предыдущая', callback_data: `remove_channel_page_${groupName}_${currentPage - 1}` }]);
+    }
+    if (currentPage < totalPages) {
+        navigationButtons.push([{ text: 'Следующая ➡️', callback_data: `remove_channel_page_${groupName}_${currentPage + 1}` }]);
+    }
+
+    return [
+        ...channelButtons,
+        [{ text: 'Подтвердить удаление выбранных каналов', callback_data: `confirm_remove_from_group_${groupName}` }],
+        ...navigationButtons,
+        [{ text: 'Назад к группам', callback_data: 'view_groups' }]
+    ];
+};
 
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
@@ -243,15 +295,25 @@ bot.on('callback_query', async (query) => {
         }
 
         if (data === 'create_group') {
-            selectedChannels1 = []; 
-            await bot.editMessageText('Выберите каналы для новой группы:', {
+            selectedChannels1 = [];
+            const currentPage = 1; 
+        
+            const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
+                return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
+            });
+        
+            const totalChannels = sortedChannels.length; 
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+        
+            const pageInfoText = `Выберите каналы для новой группы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
+        
+            await bot.editMessageText(pageInfoText, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
                 reply_markup: {
                     inline_keyboard: [
-                        ...generateGroupChannelButtons(), 
+                        ...generateGroupChannelButtons(currentPage), 
                         [
-                            { text: 'Главное меню', callback_data: 'main_menu' }
                         ]
                     ]
                 }
@@ -259,8 +321,32 @@ bot.on('callback_query', async (query) => {
             return;
         }
         
+        if (data.startsWith('view_page_')) {
+            const currentPage = parseInt(data.split('_')[2]) || 1; 
+        
+            const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
+                return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
+            });
+        
+            const totalChannels = sortedChannels.length;
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+        
+            const pageInfoText = `Выберите каналы для новой группы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
+        
+            await bot.editMessageText(pageInfoText, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateGroupChannelButtons(currentPage)
+                }
+            });
+            return;
+        }      
+        
         if (data.startsWith('group_')) {
-            const channelId = data.split('_')[1]; 
+            const parts = data.split('_');
+            const channelId = parts[1];
+            const currentPage = parseInt(parts[2]) || 1;
             const selectedChannel = channels[channelId];
         
             if (selectedChannels1.includes(channelId)) { 
@@ -269,12 +355,7 @@ bot.on('callback_query', async (query) => {
                     chat_id: chatId,
                     message_id: query.message.message_id,
                     reply_markup: {
-                        inline_keyboard: [
-                            ...generateGroupChannelButtons(),
-                            [
-                                { text: 'Главное меню', callback_data: 'main_menu' } 
-                            ]
-                        ]
+                        inline_keyboard: generateGroupChannelButtons(currentPage) 
                     }
                 });
             } else {
@@ -283,12 +364,7 @@ bot.on('callback_query', async (query) => {
                     chat_id: chatId,
                     message_id: query.message.message_id,
                     reply_markup: {
-                        inline_keyboard: [
-                            ...generateGroupChannelButtons(),
-                            [
-                                { text: 'Главное меню', callback_data: 'main_menu' }
-                            ]
-                        ]
+                        inline_keyboard: generateGroupChannelButtons(currentPage)
                     }
                 });
             }
@@ -304,9 +380,14 @@ bot.on('callback_query', async (query) => {
             bot.once('text', async (msg) => {
                 const groupName = msg.text.trim();
                 if (!groupName || groups[groupName]) {
-                    await bot.editMessageText('Название группы недопустимо или уже существует. Попробуйте снова.', {
-                        chat_id: chatId,
-                        message_id: query.message.message_id
+                    await bot.sendMessage(chatId, 'Название группы недопустимо или уже существует. Попробуйте снова.', {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Создать еще группу', callback_data: 'create_group' } 
+                                ]
+                            ]
+                        }
                     });                 
                     return;
                 }
@@ -326,7 +407,15 @@ bot.on('callback_query', async (query) => {
                     selectedChannels1 = [];
         
                 } else {
-                    await bot.sendMessage(chatId, 'Ошибка: каналы не выбраны.');
+                    await bot.sendMessage(chatId, 'Ошибка: каналы не выбраны.', {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Создать еще группу', callback_data: 'create_group' } 
+                            ]
+                        ]
+                    }
+                });
                 }
             });
             return;
@@ -367,25 +456,34 @@ bot.on('callback_query', async (query) => {
         if (data.startsWith('view_group_')) {
             const parts = data.split('_');
             const groupName = parts[2];  
-            const currentPage = parseInt(parts[3]) || 1;
-            
+            let currentPage = parseInt(parts[3]) || 1;
+        
             const channelsInGroup = groups[groupName] || [];
             const totalChannels = channelsInGroup.length;
             const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
         
+            if (currentPage < 1) {
+                currentPage = 1;
+            }
+        
             if (totalChannels > 0) {
+                if (currentPage > totalPages) {
+                    currentPage = totalPages;
+                }
+        
                 const startChannel = (currentPage - 1) * ITEMS_PER_PAGE + 1;
                 const endChannel = Math.min(currentPage * ITEMS_PER_PAGE, totalChannels);
         
                 await bot.editMessageText( 
                     `Группа "${groupName}" содержит следующие каналы (страница ${currentPage} из ${totalPages}, показываются ${startChannel}-${endChannel} из ${totalChannels}):`,
-                {
-                    chat_id: chatId,
-                    message_id: query.message.message_id,
-                    reply_markup: {
-                        inline_keyboard: generateSelectableChannelButtonsForGroup(groupName, currentPage) 
+                    {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: generateSelectableChannelButtonsForGroup(groupName, currentPage) 
+                        }
                     }
-                });
+                );
             } else {
                 await bot.editMessageText(`Группа "${groupName}" пуста или не существует.`, {
                     chat_id: chatId,
@@ -400,9 +498,6 @@ bot.on('callback_query', async (query) => {
                 });
             }
         }
-        
-
-
         
         if (data.startsWith('toggle_channel_')) {
             const parts = data.split('_');
@@ -433,18 +528,16 @@ bot.on('callback_query', async (query) => {
         
         if (data.startsWith('select_all_channels_')) {
             const parts = data.split('_');
-            const groupName = parts[3]; // Получаем название группы
-            const channelIdsInGroup = parts.slice(4); // Получаем идентификаторы каналов
+            const groupName = parts[3]; 
+            const channelIdsInGroup = parts[4].split(','); 
         
             console.log(`Исходные toggleChannels: ${JSON.stringify(toggleChannels)}`);
             console.log(`Название группы: ${groupName}`);
             console.log(`Идентификаторы каналов в группе: ${JSON.stringify(channelIdsInGroup)}`);
         
-            // Если все каналы выбраны, убираем их
             if (toggleChannels.length === channelIdsInGroup.length) {
-                toggleChannels = []; // Сбрасываем выбор
+                toggleChannels = []; 
             } else {
-                // Добавляем все каналы, если они не выбраны
                 channelIdsInGroup.forEach(channelId => {
                     if (!toggleChannels.includes(channelId)) {
                         toggleChannels.push(channelId);
@@ -454,13 +547,14 @@ bot.on('callback_query', async (query) => {
         
             console.log(`Текущий выбор каналов после обработки: ${JSON.stringify(toggleChannels)}`);
         
-            // Генерируем новые кнопки
-            const newMarkup = generateSelectableChannelButtonsForGroup(groupName);
+            const newMarkup = await generateSelectableChannelButtonsForGroup(groupName);
         
-            // Сравниваем новую и текущую разметку
-            const currentMarkup = query.message.reply_markup;
-            if (JSON.stringify(currentMarkup.inline_keyboard) !== JSON.stringify(newMarkup)) {
-                // Обновляем разметку только если она изменилась
+            const currentMarkup = query.message.reply_markup.inline_keyboard;
+        
+            const newMarkupString = JSON.stringify(newMarkup);
+            const currentMarkupString = JSON.stringify(currentMarkup);
+        
+            if (currentMarkupString !== newMarkupString) {
                 await bot.editMessageReplyMarkup({
                     inline_keyboard: newMarkup
                 }, {
@@ -470,52 +564,59 @@ bot.on('callback_query', async (query) => {
             }
             return;
         }
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-
 
         if (data.startsWith('add_channel_to_group_')) {
             const groupName = data.split('_').pop();
-            selectedChannels1 = []; 
-
-            await bot.editMessageText( `Добавляем каналы в группу "${groupName}". Выберите каналы:`, {
+            selectedChannels1 = [];
+            const currentPage = 1; 
+        
+            const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
+                return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
+            });
+        
+            const totalChannels = sortedChannels.length; 
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+        
+            const pageInfoText = `Добавляем каналы в группу "${groupName}". Выберите каналы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
+        
+            await bot.editMessageText(pageInfoText, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
                 reply_markup: {
-                    inline_keyboard:
-                    [
-                       ...generateAddChannelButtonsForGroup(groupName),
-                        [
-                            { text: 'Назад к группам', callback_data: 'view_groups' } 
-                        ]
-
-                    ] 
+                    inline_keyboard: generateAddChannelButtonsForGroup(groupName, currentPage)
                 }
             });
             return;
         }
-
+        
+        if (data.startsWith('add_channel_page_')) {
+            const parts = data.split('_');
+            const groupName = parts[3];
+            const currentPage = parseInt(parts[4]) || 1;
+        
+            await bot.editMessageText(`Добавляем каналы в группу "${groupName}". Выберите каналы:\n\nСтраница ${currentPage} из ${Math.ceil(Object.entries(channels).length / ITEMS_PER_PAGE)} (всего каналов: ${Object.entries(channels).length})`, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateAddChannelButtonsForGroup(groupName, currentPage)
+                }
+            });
+            return;
+        }
+        
         if (data.startsWith('select_channel_')) {
-            const channelId = data.split('_')[2]; 
+            const parts = data.split('_');
+            const channelId = parts[2];
+            const currentPage = parseInt(parts[3]) || 1;
+        
             if (selectedChannels1.includes(channelId)) {
-                selectedChannels1 = selectedChannels1.filter(id => id !== channelId); 
+                selectedChannels1 = selectedChannels1.filter(id => id !== channelId);
             } else {
-                selectedChannels1.push(channelId); 
+                selectedChannels1.push(channelId);
             }
         
             await bot.editMessageReplyMarkup({
-                inline_keyboard: generateAddChannelButtonsForGroup(query.message.text.split('"')[1])
+                inline_keyboard: generateAddChannelButtonsForGroup(query.message.text.split('"')[1], currentPage)
             }, {
                 chat_id: chatId,
                 message_id: query.message.message_id
@@ -524,11 +625,11 @@ bot.on('callback_query', async (query) => {
         }
         
         if (data.startsWith('confirm_add_to_group_')) {
-            const groupName = data.split('_').pop(); 
+            const groupName = data.split('_').pop();
             if (selectedChannels1.length > 0) {
                 const channelIds = selectedChannels1;
-                groups[groupName] = [...(groups[groupName] || []), ...channelIds];  
-                const channelNames = channelIds.map(id => channels[id]); 
+                groups[groupName] = [...(groups[groupName] || []), ...channelIds];
+                const channelNames = channelIds.map(id => channels[id]);
                 await bot.editMessageText(`Каналы ${channelNames.join(', ')} добавлены в группу "${groupName}".`, {
                     chat_id: chatId,
                     message_id: query.message.message_id,
@@ -557,75 +658,117 @@ bot.on('callback_query', async (query) => {
             return;
         }
         
-            if (data.startsWith('remove_channel_from_group_')) {
-                const groupName = data.split('_').pop();
-                selectedChannelsForRemoval = []; 
-
-                await bot.editMessageText(`Удаляем каналы из группы "${groupName}". Выберите каналы:`, {
+        if (data.startsWith('remove_channel_from_group_')) {
+            const groupName = data.split('_').pop();
+            selectedChannelsForRemoval = []; 
+            const currentPage = 1; 
+        
+            const channelIdsInGroup = groups[groupName] || [];
+            const totalChannels = channelIdsInGroup.length; 
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+        
+            const pageInfoText = `Удаляем каналы из группы "${groupName}". Выберите каналы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
+        
+            await bot.editMessageText(pageInfoText, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateRemoveChannelButtonsForGroup(groupName, currentPage)
+                }
+            });
+            return;
+        }
+        
+        if (data.startsWith('select_remove_channel_')) {
+            const parts = data.split('_');
+            const channelId = parts[3]; 
+            const currentPage = parseInt(parts[4]);
+        
+            const groupName = query.message.text.split('"')[1];
+        
+            if (selectedChannelsForRemoval.includes(channelId)) {
+                selectedChannelsForRemoval = selectedChannelsForRemoval.filter(id => id !== channelId);
+            } else {
+                selectedChannelsForRemoval.push(channelId);
+            }
+            await bot.editMessageReplyMarkup({
+                inline_keyboard: generateRemoveChannelButtonsForGroup(groupName, currentPage)
+            }, {
+                chat_id: chatId,
+                message_id: query.message.message_id
+            });
+            return;
+        }
+        
+        if (data.startsWith('remove_channel_page_')) {
+            const parts = data.split('_');
+            const groupName = parts.slice(3, parts.length - 1).join('_');
+            const currentPage = parseInt(parts[parts.length - 1]);
+        
+            console.log(`Current group name: ${groupName}, current page: ${currentPage}`);
+        
+            await bot.editMessageText(`Удаляем каналы из группы "${groupName}". Выберите каналы:`, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateRemoveChannelButtonsForGroup(groupName, currentPage) 
+                }
+            });
+            return;
+        }        
+        
+        if (data.startsWith('confirm_remove_from_group_')) {
+            const groupName = data.split('_').pop();
+        
+            if (selectedChannelsForRemoval.length > 0) {
+                const channelNames = selectedChannelsForRemoval.map(id => channels[id]);
+                groups[groupName] = groups[groupName].filter(id => !selectedChannelsForRemoval.includes(id));
+                await bot.editMessageText(`Каналы ${channelNames.join(', ')} удалены из группы "${groupName}".`, {
                     chat_id: chatId,
                     message_id: query.message.message_id,
                     reply_markup: {
-                        inline_keyboard:[ 
-                        ...generateRemoveChannelButtonsForGroup(groupName),
-                        [
-                            { text: 'Назад к группам', callback_data: 'view_groups' } 
+                        inline_keyboard: [
+                            [
+                                { text: 'Назад к группам', callback_data: 'view_groups' }
+                            ]
                         ]
-                    ] 
                     }
                 });
-                return;
-            }
-
-            if (data.startsWith('select_remove_channel_')) {
-                const channelId = data.split('_')[3];
-
-                if (selectedChannelsForRemoval.includes(channelId)) {
-                    selectedChannelsForRemoval = selectedChannelsForRemoval.filter(id => id !== channelId); 
-                } else {
-                    selectedChannelsForRemoval.push(channelId);
-                }
-
-                await bot.editMessageReplyMarkup({
-                    inline_keyboard: generateRemoveChannelButtonsForGroup(query.message.text.split('"')[1])
-                }, {
+                selectedChannelsForRemoval = [];
+            } else {
+                await bot.editMessageText('Ошибка: не выбраны каналы для удаления.', {
                     chat_id: chatId,
-                    message_id: query.message.message_id
-                });
-                return;
-            }
-
-            if (data.startsWith('confirm_remove_from_group_')) {
-                const groupName = data.split('_').pop();
-
-                if (selectedChannelsForRemoval.length > 0) {
-                    const channelNames = selectedChannelsForRemoval.map(id => channels[id]);
-                    groups[groupName] = groups[groupName].filter(id => !selectedChannelsForRemoval.includes(id));
-                    await bot.editMessageText(`Каналы ${channelNames.join(', ')} удалены из группы "${groupName}".`, {
-                    chat_id: chatId,
-                                message_id: query.message.message_id,
-                                reply_markup: {
-                                    inline_keyboard: [
-                                        [
-                                            { text: 'Назад к группам', callback_data: 'view_groups' }
-                                        ]
-                                    ]
-                                }
-                            });
-                    selectedChannelsForRemoval = [];
-                } 
-                else {
-                    await bot.editMessageText( 'Ошибка: не выбраны каналы для удаления.', {
-                        chat_id: chatId,
-                        message_id: query.message.message_id,
-                        reply_markup: {
-                            inline_keyboard: [
-                                [
-                                    { text: 'Назад к группам', callback_data: 'view_groups' }
-                                ]
+                    message_id: query.message.message_id,
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: 'Назад к группам', callback_data: 'view_groups' }
                             ]
-                        }
-                    });
+                        ]
+                    }
+                });
+            }
+            return;
+        }
+        
+        if (data.startsWith('remove_channel_page_')) {
+            const parts = data.split('_');
+            const groupName = parts[2];
+            let currentPage = parseInt(parts[3]) || 1;
+        
+            const totalChannels = (groups[groupName] || []).length;
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+        
+            if (currentPage < 1) currentPage = 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+        
+            await bot.editMessageText(`Удаляем каналы из группы "${groupName}". Выберите каналы:`, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateRemoveChannelButtonsForGroup(groupName, currentPage)
                 }
+            });
             return;
         }
   
@@ -740,7 +883,7 @@ bot.on('callback_query', async (query) => {
                         { text: 'Удалить группу', callback_data: `delete_group_${groupName}` }
                     ],
                     [
-                        { text: 'Назад к каналам', callback_data: `view_group_${groupName}_1` } // Возврат к списку каналов
+                        { text: 'Назад к каналам', callback_data: `view_group_${groupName}_1` }
                     ]
                 ]
             }

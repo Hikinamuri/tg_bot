@@ -169,7 +169,8 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
         [{ text: 'Настройки группы', callback_data: `settings_group_${groupName}` }],
         selectAllButton,
         [{ text: 'Назад к группам', callback_data: 'view_groups' }],
-        [{ text: 'Главное меню', callback_data: 'main_menu' }]
+        [{ text: 'Главное меню', callback_data: 'main_menu' }],
+        [{ text: 'Отправить в группу', callback_data: 'send_in_group' }]
     ];
 };
 
@@ -254,53 +255,6 @@ bot.on('callback_query', async (query) => {
     const data = query.data;
 
     try {
-        if (data === 'send_message') {
-            const channelsToSend = selectedChannels.length ? selectedChannels : Object.keys(channels);
-            await bot.sendMessage(chatId, `Введите сообщение для отправки в ${channelsToSend.length} канала(ов).`);
-            bot.once('text', async (msg) => {
-                const textToSend = msg.text;
-                for (const channelId of channelsToSend) {
-                    try {
-                        await bot.sendMessage(channelId, textToSend);
-                    } catch (error) {
-                        console.error(`Ошибка отправки в канал ${channelId}:`, error);
-                    }
-                }
-                await bot.sendMessage(chatId, 'Сообщение успешно отправлено.');
-                selectedChannels = [];
-            });
-            return;
-        }
-
-        if (data === 'select_all') {
-            selectedChannels = Object.keys(channels);
-            await bot.sendMessage(chatId, 'Выбраны все каналы.');
-            await bot.editMessageReplyMarkup({
-                inline_keyboard: generateChannelButtons()
-            }, {
-                chat_id: chatId,
-                message_id: query.message.message_id
-            });
-            return;
-        }
-
-        if (data.startsWith('channel_')) {
-            const channelId = data.split('_')[1];
-            if (selectedChannels.includes(channelId)) {
-                selectedChannels = selectedChannels.filter(id => id !== channelId);
-            } else {
-                selectedChannels.push(channelId);
-            }
-
-            await bot.editMessageReplyMarkup({
-                inline_keyboard: generateChannelButtons()
-            }, {
-                chat_id: chatId,
-                message_id: query.message.message_id
-            });
-            return;
-        }
-
         if (data === 'create_group') {
             selectedChannels1 = [];
             const currentPage = 1; 
@@ -401,7 +355,7 @@ bot.on('callback_query', async (query) => {
                 
                 if (selectedChannels1 && selectedChannels1.length > 0) {
                     groups[groupName] = selectedChannels1;
-                    await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: ${selectedChannels1.map(id => channels[id]).join(', ')}`, {
+                    await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: \n${selectedChannels1.map(id => channels[id]).join(', ')}`, {
                         reply_markup: {
                             inline_keyboard: [
                                 [
@@ -429,7 +383,6 @@ bot.on('callback_query', async (query) => {
         }        
         
         if (data === 'view_groups') {
-
             if (Object.keys(groups).length === 0) {                
                 await bot.editMessageText('Пока нет доступных групп.', {
                     chat_id: chatId,
@@ -450,14 +403,13 @@ bot.on('callback_query', async (query) => {
                 message_id: query.message.message_id,
                 reply_markup: {
                     inline_keyboard: [
-                        ...generateGroupButtons(), 
+                        ...generateGroupButtons(),
                         [
                             { text: 'Главное меню', callback_data: 'main_menu' }
                         ]
                     ]
                 }
-            });            
-            return;
+            });         
         }
         
         if (data.startsWith('view_group_')) {
@@ -1097,7 +1049,136 @@ bot.on('callback_query', async (callbackQuery) => {
         selectedChannels = Object.keys(channels);
         await bot.sendMessage(chatId, 'Выбраны все каналы.');
         bot.emit('channels', callbackQuery.message);
-    } else {
+    } else if (callbackData === 'send_in_group') {
+        const channelsToSend = toggleChannels;
+        if (channelsToSend.length === 0) {
+            await bot.sendMessage(chatId, 'Нет выбранных каналов.');
+            return;
+        }
+
+        // Запрашиваем сообщение с текстом и медиа
+        await bot.sendMessage(chatId, 'Введите текст для рассылки и прикрепите медиа (фото или видео).');
+
+        let mediaGroup = [];
+        let isGroupProcessing = false;
+        let mediaTimeout;
+
+        const finalizeMediaGroup = async () => {
+            if (mediaGroup.length > 0) {
+                isSending = true;
+                for (const channelId of channelsToSend) {
+                    try {
+                        // const channelTitle = channels[channelId];
+                        // mediaGroup[0].caption += `\n\nПодписывайтесь на канал - ${channelTitle}`
+                        
+                        await bot.sendMediaGroup(channelId, mediaGroup);
+                        selectedChannels = []
+                    } catch (error) {
+                        console.error(`Ошибка отправки в канал ${channelId}:`, error);
+                    }
+                }
+                await bot.sendMessage(chatId, 'Медиа-группа успешно отправлена.');
+                mediaGroup = [];
+                isGroupProcessing = false;
+                isSending = false;
+            }
+            bot.removeListener('message', handleMediaMessage);
+        };
+
+        const handleMediaMessage = async (msg) => {
+            if (isSending) return;
+            
+            if (msg.media_group_id) {
+                isGroupProcessing = true;
+
+                // Очищаем предыдущий таймаут
+                clearTimeout(mediaTimeout);
+
+                // Проверяем наличие фото
+                if (msg.photo) {
+                    mediaGroup.push({
+                        type: 'photo',
+                        media: msg.photo[msg.photo.length - 1].file_id, // Наивысшее качество
+                        caption: mediaGroup.length === 0 ? msg.text || msg.caption || '' : undefined // Подпись только к первому медиа
+                    });
+                }
+
+                // Проверяем наличие видео
+                if (msg.video) {
+                    mediaGroup.push({
+                        type: 'video',
+                        media: msg.video.file_id,
+                        caption: mediaGroup.length === 0 ? textToSend : undefined
+                    });
+                }
+
+                mediaTimeout = setTimeout(finalizeMediaGroup, 2000);
+            } else if (!msg.media_group_id && isGroupProcessing) {
+                clearTimeout(mediaTimeout);
+                await finalizeMediaGroup();
+            } else if (!isGroupProcessing) {
+                let mediaToSend = [];
+
+                if (msg.photo) {
+                    mediaToSend.push({
+                        type: 'photo',
+                        media: msg.photo[msg.photo.length - 1].file_id,
+                        caption: textToSend
+                    });
+                }
+
+                if (msg.video) {
+                    mediaToSend.push({
+                        type: 'video',
+                        media: msg.video.file_id,
+                        caption: textToSend
+                    });
+                }
+
+                if (mediaToSend.length === 0) {
+                    for (const channelId of channelsToSend) {
+                        const channelTitle = channels[channelId];
+                        const textToSend = `${msg.text || msg.caption || ''}\n\nПодписывайтесь на канал - ${channelTitle}`;
+
+                        try {
+                            await bot.sendMessage(channelId, textToSend);
+                            await bot.sendMessage(chatId, 'Текст успешно отправлен.');
+                            selectedChannels = []
+                        } catch (error) {
+                            console.error(`Ошибка отправки в канал ${channelId}:`, error);
+                        }
+                    }
+                } else {
+                    for (const channelId of channelsToSend) {
+                        try {
+                            await bot.sendMediaGroup(channelId, mediaToSend);
+                        } catch (error) {
+                            console.error(`Ошибка отправки в канал ${channelId}:`, error);
+                        }
+                    }
+                }
+            bot.removeListener('message', handleMediaMessage);
+            }
+        };
+
+        bot.on('message', handleMediaMessage);
+    } else if (
+        callbackData !== 'view_groups' && 
+        callbackData !== 'main_menu' && 
+        callbackData !== 'view_group' && 
+        callbackData !== 'create_group' && 
+        callbackData.split('_')[0] !== 'group' && 
+        callbackData !== 'confirm_create_group' &&
+        callbackData.split('_')[0] !== 'view' &&
+        callbackData.split('_')[0] !== 'add' &&
+        callbackData.split('_')[0] !== 'confirm' &&
+        callbackData.split('_')[0] !== 'settings' &&
+        callbackData.split('_')[0] !== 'delete' &&
+        callbackData.split('_')[0] !== 'select' &&
+        callbackData.split('_')[0] !== 'send'  &&
+        callbackData.split('_')[0] !== 'edit'  &&
+        callbackData.split('_')[0] !== 'remove'
+    ) {
         // Логика выбора каналов
         if (selectedChannels.includes(callbackData)) {
             selectedChannels = selectedChannels.filter(id => id !== callbackData);
@@ -1112,6 +1193,18 @@ bot.on('callback_query', async (callbackQuery) => {
             message_id: callbackQuery.message.message_id
         });
     }
+});
+
+bot.onText(/\/groups/, async (msg) => {
+    const chatId = msg.chat.id;
+    const sentMessage = await bot.sendMessage(chatId, 'Что вы хотите сделать:', {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: 'Создать новую группу', callback_data: 'create_group' }],
+                [{ text: 'Посмотреть существующие группы', callback_data: 'view_groups' }]
+            ]
+        }
+    });
 });
 
 const commands = [

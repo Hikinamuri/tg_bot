@@ -4,6 +4,7 @@ const TelegramBot =  require('node-telegram-bot-api')
 const channels = {};
 let selectedChannels = [];
 let pendingMedia = [];
+let isAwaitingChannel = false;
 
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
 const bot = new TelegramBot(apiKeyBot, {
@@ -39,7 +40,6 @@ bot.on('text', async msg => {
 })
 
 bot.on('photo', async (msg) => {
-    const chatId = msg.chat.id;
 
     if (msg.forward_from_chat) {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
@@ -47,14 +47,12 @@ bot.on('photo', async (msg) => {
             type: 'photo',
             media: fileId
         });
-        await bot.sendMessage(chatId, 'Фото добавлено.');
     } else {
         const fileId = msg.photo[msg.photo.length - 1].file_id;
         pendingMedia.push({
             type: 'photo',
             media: fileId
         });
-        await bot.sendMessage(chatId, 'Фото добавлено.');
     }
 });
 
@@ -65,16 +63,16 @@ bot.on('video', async (msg) => {
         type: 'video',
         media: fileId
     });
-    await bot.sendMessage(msg.chat.id, 'Видео добавлено.');
 });
 
 // Добавление канала
 bot.on('message', async (msg) => {
-    if (msg.forward_from_chat) {
+    if (isAwaitingChannel && msg.forward_from_chat) {
         const channelId = msg.forward_from_chat.id;
         const channelTitle = msg.forward_from_chat.title || "Неизвестный канал";
 
         channels[channelId] = channelTitle;
+        isAwaitingChannel = false;
 
         await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен.`);
     }
@@ -88,8 +86,10 @@ const generateChannelButtons = () => {
         }];
     });
 
-    channelButtons.push([{ text: 'Отправить сообщение ✅', callback_data: 'send_message' }]);
+    channelButtons.push([{ text: 'Добавить канал', callback_data: 'add_channel' }])
+    channelButtons.push([{ text: 'Удалить каналы', callback_data: 'delete_channel' }]);
     channelButtons.push([{ text: 'Выбрать все каналы', callback_data: 'select_all' }]);
+    channelButtons.push([{ text: 'Отправить сообщение ✅', callback_data: 'send_message' }]);
 
     return channelButtons;
 }
@@ -98,7 +98,13 @@ bot.onText(/\/channels/, async (msg) => {
     const chatId = msg.chat.id;
 
     if (Object.keys(channels).length === 0) {
-        await bot.sendMessage(chatId, 'Пока нет доступных каналов.');
+        await bot.sendMessage(chatId, 'Пока нет доступных каналов.', {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: 'Добавить канал', callback_data: 'add_channel' }],
+                ]
+            }
+        });
         return;
     }
 
@@ -113,6 +119,12 @@ bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const callbackData = callbackQuery.data;
 
+    if (callbackData === 'add_channel') {
+        isAwaitingChannel = true;
+        await bot.sendMessage(chatId, 'Чтобы добавить канал, перешлите любое сообщение из канала боту и сделайте его администратором нужного канала.');
+        return;
+    }
+
     if (callbackData === 'send_message') {
         const channelsToSend = selectedChannels.length ? selectedChannels : Object.keys(channels);
         if (channelsToSend.length === 0) {
@@ -120,11 +132,12 @@ bot.on('callback_query', async (callbackQuery) => {
             return;
         }
 
+        // Запрашиваем сообщение с текстом и медиа
         await bot.sendMessage(chatId, 'Введите текст для рассылки и прикрепите медиа (фото или видео).');
 
         let mediaGroup = [];
         let isGroupProcessing = false;
-        let mediaTimeout; // Таймаут для завершения обработки медиа-группы
+        let mediaTimeout;
 
         const finalizeMediaGroup = async () => {
             if (mediaGroup.length > 0) {

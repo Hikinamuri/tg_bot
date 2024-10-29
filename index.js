@@ -1,43 +1,37 @@
-require('dotenv').config()
-const TelegramBot =  require('node-telegram-bot-api')
+require('dotenv').config();
+const TelegramBot = require('node-telegram-bot-api');
 
 const channels = {};
 let selectedChannels = [];
 let pendingMedia = [];
 let isAwaitingChannel = false;
+let selectedForDeletion = [];
 
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
-const bot = new TelegramBot(apiKeyBot, {
-    polling: true
-});
+const bot = new TelegramBot(apiKeyBot, { polling: true });
 
 bot.on("polling_error", err => console.log(err.data?.error?.message));
 
-bot.on('text', async msg => {
+bot.on('text', async (msg) => {
     try {
         if (msg.text === '/start') {
-            bot.sendMessage(msg.chat.id, 'Добрый день')
-            return
+            bot.sendMessage(msg.chat.id, 'Добрый день');
+            return;
         }
-        else if(msg.text == '/help') {
+        else if (msg.text == '/help') {
             await bot.sendMessage(msg.chat.id, `Раздел помощи HTML\n\n<b>Жирный Текст</b>\n<i>Текст Курсивом</i>\n<code>Текст с Копированием</code>\n<s>Перечеркнутый текст</s>\n<u>Подчеркнутый текст</u>\n<pre language='c++'>код на c++</pre>\n<a href='t.me'>Гиперссылка</a>`, {
                 parse_mode: "HTML"
             });
-            return
+            return;
         }
 
         const forwardFromChatId = msg.forward_origin?.chat?.id;
-        const messageText = `${msg.text}\n<a href='t.me'>${msg.forward_origin?.chat?.title}</a>`
-
-        // console.log(messageText, 'messageText')
-        // forwardFromChatId ? await bot.sendMessage(forwardFromChatId, messageText, {
-        //     parse_mode: "HTML"
-        // }) : await bot.sendMessage(msg.chat.id, msg.text)
+        const messageText = `${msg.text}\n<a href='t.me'>${msg.forward_origin?.chat?.title}</a>`;
     }
     catch (error) {
         console.error(error);
     }
-})
+});
 
 bot.on('photo', async (msg) => {
 
@@ -56,7 +50,6 @@ bot.on('photo', async (msg) => {
     }
 });
 
-// Аналогично обрабатываем видео
 bot.on('video', async (msg) => {
     const fileId = msg.video.file_id;
     pendingMedia.push({
@@ -86,10 +79,23 @@ const generateChannelButtons = () => {
         }];
     });
 
-    channelButtons.push([{ text: 'Добавить канал', callback_data: 'add_channel' }])
+    channelButtons.push([{ text: 'Добавить канал', callback_data: 'add_channel' }]);
     channelButtons.push([{ text: 'Удалить каналы', callback_data: 'delete_channel' }]);
     channelButtons.push([{ text: 'Выбрать все каналы', callback_data: 'select_all' }]);
     channelButtons.push([{ text: 'Отправить сообщение ✅', callback_data: 'send_message' }]);
+
+    return channelButtons;
+}
+
+const generateDeleteButtons = () => {
+    const channelButtons = Object.entries(channels).map(([id, title]) => {
+        return [{
+            text: `${title} ${selectedForDeletion.includes(id) ? '❌' : ''}`,
+            callback_data: `delete_${id}`  // Изменяем callback_data для кнопок удаления
+        }];
+    });
+
+    channelButtons.push([{ text: 'Удалить выбранные', callback_data: 'remove_selected' }]);
 
     return channelButtons;
 }
@@ -100,9 +106,7 @@ bot.onText(/\/channels/, async (msg) => {
     if (Object.keys(channels).length === 0) {
         await bot.sendMessage(chatId, 'Пока нет доступных каналов.', {
             reply_markup: {
-                inline_keyboard: [
-                    [{ text: 'Добавить канал', callback_data: 'add_channel' }],
-                ]
+                inline_keyboard: [[{ text: 'Добавить канал', callback_data: 'add_channel' }]],
             }
         });
         return;
@@ -118,6 +122,52 @@ bot.onText(/\/channels/, async (msg) => {
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const callbackData = callbackQuery.data;
+
+    if (callbackData === 'delete_channel') {
+        selectedForDeletion = []; // Сбрасываем выбранные для удаления каналы
+        await bot.sendMessage(chatId, 'Выберите каналы для удаления:', {
+            reply_markup: {
+                inline_keyboard: generateDeleteButtons()
+            }
+        });
+        return;
+    }
+
+    if (callbackData.startsWith('delete_')) {
+        const channelId = callbackData.split('_')[1];
+
+        // Логика для добавления/удаления канала из списка выбранных для удаления
+        if (selectedForDeletion.includes(channelId)) {
+            selectedForDeletion = selectedForDeletion.filter(id => id !== channelId);
+        } else {
+            selectedForDeletion.push(channelId);
+        }
+
+        await bot.editMessageReplyMarkup({
+            inline_keyboard: generateDeleteButtons()
+        }, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id
+        });
+
+        return;
+    }
+
+    // Логика удаления выбранных каналов
+    if (callbackData === 'remove_selected') {
+        selectedForDeletion.forEach(channelId => {
+            delete channels[channelId]; // Удаляем канал из списка
+        });
+        selectedForDeletion = []; // Очищаем список
+        await bot.sendMessage(chatId, 'Выбранные каналы успешно удалены.');
+        await bot.editMessageReplyMarkup({
+            inline_keyboard: generateChannelButtons() // Возвращаем основное меню каналов
+        }, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id
+        });
+        return; // Завершаем обработку
+    }
 
     if (callbackData === 'add_channel') {
         isAwaitingChannel = true;
@@ -222,8 +272,6 @@ bot.on('callback_query', async (callbackQuery) => {
                         }
                     }
                 }
-                await bot.sendMessage(chatId, 'Сообщение успешно отправлено.');
-                bot.removeListener('message', handleMediaMessage);
             }
         };
 
@@ -248,11 +296,3 @@ bot.on('callback_query', async (callbackQuery) => {
         });
     }
 });
-
-
-const commands = [
-    { command: "start", description: "Запуск бота" },
-    { command: "channels", description: "Список каналов" },
-]
-
-bot.setMyCommands(commands);

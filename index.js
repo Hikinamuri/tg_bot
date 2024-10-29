@@ -19,15 +19,8 @@ bot.on('text', async (msg) => {
             bot.sendMessage(msg.chat.id, 'Добрый день');
             return;
         }
-        else if (msg.text == '/help') {
-            await bot.sendMessage(msg.chat.id, `Раздел помощи HTML\n\n<b>Жирный Текст</b>\n<i>Текст Курсивом</i>\n<code>Текст с Копированием</code>\n<s>Перечеркнутый текст</s>\n<u>Подчеркнутый текст</u>\n<pre language='c++'>код на c++</pre>\n<a href='t.me'>Гиперссылка</a>`, {
-                parse_mode: "HTML"
-            });
-            return;
-        }
-
-        const forwardFromChatId = msg.forward_origin?.chat?.id;
-        const messageText = `${msg.text}\n<a href='t.me'>${msg.forward_origin?.chat?.title}</a>`;
+        // const forwardFromChatId = msg.forward_origin?.chat?.id;
+        // const messageText = `${msg.text}\n<a href='t.me'>${msg.forward_origin?.chat?.title}</a>`;
     }
     catch (error) {
         console.error(error);
@@ -195,7 +188,11 @@ bot.on('callback_query', async (callbackQuery) => {
                 isSending = true;
                 for (const channelId of channelsToSend) {
                     try {
+                        // const channelTitle = channels[channelId];
+                        // mediaGroup[0].caption += `\n\nПодписывайтесь на канал - ${channelTitle}`
+                        
                         await bot.sendMediaGroup(channelId, mediaGroup);
+                        selectedChannels = []
                     } catch (error) {
                         console.error(`Ошибка отправки в канал ${channelId}:`, error);
                     }
@@ -211,8 +208,6 @@ bot.on('callback_query', async (callbackQuery) => {
         const handleMediaMessage = async (msg) => {
             if (isSending) return;
             
-            const textToSend = msg.text || msg.caption || '';
-
             if (msg.media_group_id) {
                 isGroupProcessing = true;
 
@@ -224,7 +219,7 @@ bot.on('callback_query', async (callbackQuery) => {
                     mediaGroup.push({
                         type: 'photo',
                         media: msg.photo[msg.photo.length - 1].file_id, // Наивысшее качество
-                        caption: mediaGroup.length === 0 ? textToSend : undefined // Подпись только к первому медиа
+                        caption: mediaGroup.length === 0 ? msg.text || msg.caption || '' : undefined // Подпись только к первому медиа
                     });
                 }
 
@@ -262,6 +257,9 @@ bot.on('callback_query', async (callbackQuery) => {
 
                 if (mediaToSend.length === 0) {
                     for (const channelId of channelsToSend) {
+                        const channelTitle = channels[channelId];
+                        const textToSend = `${msg.text || msg.caption || ''}\n\nПодписывайтесь на канал - ${channelTitle}`;
+
                         try {
                             await bot.sendMessage(channelId, textToSend);
                             await bot.sendMessage(chatId, 'Текст успешно отправлен.');

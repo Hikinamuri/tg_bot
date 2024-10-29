@@ -5,6 +5,7 @@ const channels = {};
 let selectedChannels = [];
 let pendingMedia = [];
 let isAwaitingChannel = false;
+let isSending = false;
 let selectedForDeletion = [];
 
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
@@ -191,6 +192,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
         const finalizeMediaGroup = async () => {
             if (mediaGroup.length > 0) {
+                isSending = true;
                 for (const channelId of channelsToSend) {
                     try {
                         await bot.sendMediaGroup(channelId, mediaGroup);
@@ -201,11 +203,14 @@ bot.on('callback_query', async (callbackQuery) => {
                 await bot.sendMessage(chatId, 'Медиа-группа успешно отправлена.');
                 mediaGroup = [];
                 isGroupProcessing = false;
+                isSending = false;
             }
             bot.removeListener('message', handleMediaMessage);
         };
 
         const handleMediaMessage = async (msg) => {
+            if (isSending) return;
+            
             const textToSend = msg.text || msg.caption || '';
 
             if (msg.media_group_id) {
@@ -259,6 +264,8 @@ bot.on('callback_query', async (callbackQuery) => {
                     for (const channelId of channelsToSend) {
                         try {
                             await bot.sendMessage(channelId, textToSend);
+                            await bot.sendMessage(chatId, 'Текст успешно отправлен.');
+                            selectedChannels = []
                         } catch (error) {
                             console.error(`Ошибка отправки в канал ${channelId}:`, error);
                         }
@@ -272,6 +279,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         }
                     }
                 }
+            bot.removeListener('message', handleMediaMessage);
             }
         };
 

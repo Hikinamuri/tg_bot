@@ -1070,10 +1070,21 @@ bot.on('callback_query', async (callbackQuery) => {
                 isSending = true;
                 for (const channelId of channelsToSend) {
                     try {
-                        // const channelTitle = channels[channelId];
-                        // mediaGroup[0].caption += `\n\nПодписывайтесь на канал - ${channelTitle}`
-                        
-                        await bot.sendMediaGroup(channelId, mediaGroup);
+                        const channelTitle = channels[channelId];
+
+                        const copyMediaGroup = mediaGroup.map((item, index) => {
+                            let newItem = { ...item };
+                    
+                            if (index === 0) {
+                                newItem.caption = `${item.caption}\n\nПодписывайтесь на канал - ${channelTitle}`;
+                            }
+                    
+                            return newItem;
+                        });
+                    
+                        console.log(copyMediaGroup);
+                    
+                        await bot.sendMediaGroup(channelId, copyMediaGroup);
                         selectedChannels = []
                     } catch (error) {
                         console.error(`Ошибка отправки в канал ${channelId}:`, error);

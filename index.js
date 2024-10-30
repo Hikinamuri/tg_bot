@@ -1,7 +1,8 @@
 require('dotenv').config();
+const { Pool } = require('pg');
 const TelegramBot = require('node-telegram-bot-api');
 
-const channels = {};
+let channels = {};
 let selectedChannels = [];
 let groups = {};
 let selectedChannels1 = [];
@@ -16,31 +17,105 @@ let selectedForDeletion = [];
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
 const bot = new TelegramBot(apiKeyBot, { polling: true });
 
+const pool = new Pool({
+    user: process.env.DB_USER_NAME,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_USER_PASSWORD,
+    port: process.env.DB_PORT,
+});
+
+pool.connect()
+    .then(() => console.log('Подключение к базе данных установлено'))
+    .catch(err => console.error('Ошибка подключения к базе данных:', err));
+
 bot.on("polling_error", err => console.log(err.data?.error?.message));
 
 bot.on('text', async (msg) => {
     try {
-        if (msg.text === '/start') {
-            bot.sendMessage(msg.chat.id, 'Добрый день');
+        // Обрабатываем команду /start
+        if (msg.text.startsWith('/start')) {
+            const userId = msg.from.id;  // ID пользователя в Telegram
+            const client = await pool.connect();
+
+            try {
+                const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
+
+                if (result.rows.length > 0) {
+                    const userRole = result.rows[0].role;
+                    
+                    if (userRole === true) {
+                        // Пользователь найден и имеет роль с полными правами (role === true)
+
+                        // Запрос к таблице user_channels
+                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels WHERE user_id = $1', [userId]);
+                        channels = {};
+
+                        for (const row of channelResult.rows) {
+                            channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
+                        }
+
+                        // Запрос к таблице user_groups
+                        const groupResult = await client.query('SELECT group_id, group_name FROM user_group WHERE user_id = $1', [userId]);
+                        groups = {};
+
+                        for (const row of groupResult.rows) {
+                            if (!groups[row.group_name]) {
+                                groups[row.group_name] = [];
+                            }
+                            groups[row.group_name].push(row.group_id);  // Сохраняем имя группы и id в объект
+                        }
+
+                        await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас есть полный доступ.`);
+                        
+                        // Логируем объекты для проверки
+                        console.log('Channels:', channels);
+                        console.log('Groups:', groups);
+
+                    } else {
+                        await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас нет полного доступа.`);
+                    }
+                } else {
+                    // Если пользователь не найден, добавляем его
+                    const defaultRole = false;  // Роль по умолчанию
+                    await client.query('INSERT INTO users (user_id, role) VALUES ($1, $2)', [userId, defaultRole]);
+
+                    await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
+                }
+            } finally {
+                client.release();  // Освобождаем соединение с базой данных
+            }
             return;
         }
-        // const forwardFromChatId = msg.forward_origin?.chat?.id;
-        // const messageText = `${msg.text}\n<a href='t.me'>${msg.forward_origin?.chat?.title}</a>`;
+    } catch (error) {
+        console.error('Ошибка обработки команды:', error);
     }
-    catch (error) {
-        console.error(error);
-    }
-})
+});
 
 bot.on('message', async (msg) => {
     if (isAwaitingChannel && msg.forward_from_chat) {
         const channelId = msg.forward_from_chat.id;
         const channelTitle = msg.forward_from_chat.title || "Неизвестный канал";
+        const userId = msg.from.id;  // ID пользователя, который отправил сообщение
 
         channels[channelId] = channelTitle;
         isAwaitingChannel = false;
 
-        await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен.`);
+        // Подключаемся к базе данных и добавляем запись
+        const client = await pool.connect();
+        try {
+            // Вставляем данные в таблицу user_channels
+            await client.query(
+                'INSERT INTO user_chanels (user_id, channel_id, channel_name) VALUES ($1, $2, $3)',
+                [userId, channelId, channelTitle]
+            );
+            await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен в базу данных.`);
+        } catch (error) {
+            console.error('Ошибка при добавлении канала в базу данных:', error);
+            await bot.sendMessage(msg.chat.id, `Произошла ошибка при добавлении канала "${channelTitle}" в базу данных.`);
+        } finally {
+            client.release();  // Освобождаем соединение с базой данных
+        }
     }
 });
 
@@ -51,6 +126,8 @@ const generateChannelButtons = () => {
             callback_data: id
         }];
     });
+
+    console.log('Channels:', channels);
 
     channelButtons.push([{ text: 'Добавить канал', callback_data: 'add_channel' }]);
     channelButtons.push([{ text: 'Удалить каналы', callback_data: 'delete_channel' }]);
@@ -116,7 +193,7 @@ const generateGroupButtons = () => {
     const sortedGroups = Object.entries(groups).sort(([nameA], [nameB]) => {
         return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
     });
-
+    
     return sortedGroups.map(([name, channels]) => {
         return [{
             text: `${name} (${channels.length})`,
@@ -860,6 +937,7 @@ bot.on('callback_query', async (query) => {
 bot.onText(/\/channels/, async (msg) => {
     const chatId = msg.chat.id;
 
+    console.log('channels', channels)
     if (Object.keys(channels).length === 0) {
         await bot.sendMessage(chatId, 'Пока нет доступных каналов.', {
             reply_markup: {

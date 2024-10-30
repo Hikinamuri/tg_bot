@@ -56,14 +56,18 @@ bot.on('text', async (msg) => {
                         }
 
                         // Запрос к таблице user_groups
-                        const groupResult = await client.query('SELECT group_id, group_name FROM user_group WHERE user_id = $1', [userId]);
+                        const groupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
                         groups = {};
 
                         for (const row of groupResult.rows) {
                             if (!groups[row.group_name]) {
                                 groups[row.group_name] = [];
                             }
-                            groups[row.group_name].push(row.group_id);  // Сохраняем имя группы и id в объект
+                            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
+
+                            for (const row1 of groupChannels.rows) {
+                                groups[row.group_name].push(row1.channel_id);  // Сохраняем имя группы и id в объект
+                            }
                         }
 
                         await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас есть полный доступ.`);
@@ -205,6 +209,7 @@ const generateGroupButtons = () => {
 const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) => {
     const channelIdsInGroup = (groups[groupName] || []).slice();
 
+
     channelIdsInGroup.sort((a, b) => {
         const titleA = channels[a]?.toLowerCase() || '';
         const titleB = channels[b]?.toLowerCase() || '';
@@ -214,6 +219,9 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
     const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
     const endIdx = startIdx + ITEMS_PER_PAGE;
     const channelsOnPage = channelIdsInGroup.slice(startIdx, endIdx);
+
+    console.log(groups[groupName])
+    console.log(channelsOnPage)
 
     const channelButtons = channelsOnPage.map((channelId) => {
         const title = channels[channelId];
@@ -414,46 +422,79 @@ bot.on('callback_query', async (query) => {
                 chat_id: chatId,
                 message_id: query.message.message_id
             });
-            
+        
             bot.once('text', async (msg) => {
                 const groupName = msg.text.trim();
+                const userId = msg.from.id;  // ID пользователя, создавшего группу
+        
+                // Проверяем допустимость имени группы
                 if (!groupName || groups[groupName]) {
                     await bot.sendMessage(chatId, 'Название группы недопустимо или уже существует. Попробуйте снова.', {
                         reply_markup: {
                             inline_keyboard: [
                                 [
-                                    { text: 'Создать еще группу', callback_data: 'create_group' } 
+                                    { text: 'Создать еще группу', callback_data: 'create_group' }
                                 ]
                             ]
                         }
                     });                 
                     return;
                 }
-                
+        
+                // Проверяем, выбраны ли каналы для группы
                 if (selectedChannels1 && selectedChannels1.length > 0) {
                     groups[groupName] = selectedChannels1;
-                    await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: \n${selectedChannels1.map(id => channels[id]).join(', ')}`, {
-                        reply_markup: {
-                            inline_keyboard: [
-                                [
-                                    { text: 'Просмотреть группы', callback_data: 'view_groups' },
-                                    { text: 'Создать еще группу', callback_data: 'create_group' } 
-                                ]
-                            ]
+        
+                    const client = await pool.connect();  // Подключение к базе данных
+        
+                    try {
+                        // Вставляем новую группу в таблицу user_groups
+                        const insertGroupResult = await client.query(
+                            'INSERT INTO user_group (user_id, group_name) VALUES ($1, $2) RETURNING id',
+                            [userId, groupName]
+                        );
+                        const groupId = insertGroupResult.rows[0].id;  // Получаем ID новой группы
+        
+                        // Вставляем каналы в таблицу group_channels
+                        for (const channelId of selectedChannels1) {
+                            await client.query(
+                                `INSERT INTO group_channel 
+                                 (group_id, channel_id)
+                                 VALUES ($1, $2)`,
+                                [groupId, channelId]
+                            );
                         }
-                    });           
+        
+                        await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: \n${selectedChannels1.map(id => channels[id]).join(', ')}`, {
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [
+                                        { text: 'Просмотреть группы', callback_data: 'view_groups' },
+                                        { text: 'Создать еще группу', callback_data: 'create_group' }
+                                    ]
+                                ]
+                            }
+                        });
+                    } catch (error) {
+                        console.error('Ошибка при создании группы и добавлении каналов:', error);
+                        await bot.sendMessage(chatId, 'Ошибка при создании группы. Пожалуйста, попробуйте снова.');
+                    } finally {
+                        client.release();  // Освобождаем соединение с базой данных
+                    }
+        
                     selectedChannels1 = [];
         
                 } else {
+                    // Ошибка, если каналы не были выбраны
                     await bot.sendMessage(chatId, 'Ошибка: каналы не выбраны.', {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [
-                                { text: 'Создать еще группу', callback_data: 'create_group' } 
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Создать еще группу', callback_data: 'create_group' }
+                                ]
                             ]
-                        ]
-                    }
-                });
+                        }
+                    });
                 }
             });
             return;

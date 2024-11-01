@@ -787,36 +787,82 @@ bot.on('callback_query', async (query) => {
         if (data.startsWith('confirm_remove_from_group_')) {
             const groupName = data.split('_').pop();
         
-            if (selectedChannelsForRemoval.length > 0) {
-                const channelNames = selectedChannelsForRemoval.map(id => channels[id]);
-                groups[groupName] = groups[groupName].filter(id => !selectedChannelsForRemoval.includes(id));
-                await bot.editMessageText(`Каналы ${channelNames.join(', ')} удалены из группы "${groupName}".`, {
+            try {
+                // Получаем ID группы по имени
+                const groupId = await getGroupIdByName(groupName);
+                
+                if (selectedChannelsForRemoval.length > 0) {
+                    const channelNames = selectedChannelsForRemoval.map(id => channels[id]);
+        
+                    // Удаляем каналы из группы в базе данных по ID группы
+                    await removeChannelsByIdFromDB(groupId, selectedChannelsForRemoval);
+                
+                    // Обновляем локальную структуру данных
+                    groups[groupName] = groups[groupName].filter(id => !selectedChannelsForRemoval.includes(id));
+        
+                    await bot.editMessageText(`Каналы ${channelNames.join(', ')} удалены из группы "${groupName}".`, {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: 'Назад к группам', callback_data: 'view_groups' }]
+                            ]
+                        }
+                    });
+        
+                    selectedChannelsForRemoval = [];
+                } else {
+                    await bot.editMessageText('Ошибка: не выбраны каналы для удаления.', {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: 'Назад к группам', callback_data: 'view_groups' }]
+                            ]
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error("Ошибка при получении ID группы или удалении:", error);
+                await bot.editMessageText('Ошибка при выполнении операции. Попробуйте снова.', {
                     chat_id: chatId,
                     message_id: query.message.message_id,
                     reply_markup: {
                         inline_keyboard: [
-                            [
-                                { text: 'Назад к группам', callback_data: 'view_groups' }
-                            ]
-                        ]
-                    }
-                });
-                selectedChannelsForRemoval = [];
-            } else {
-                await bot.editMessageText('Ошибка: не выбраны каналы для удаления.', {
-                    chat_id: chatId,
-                    message_id: query.message.message_id,
-                    reply_markup: {
-                        inline_keyboard: [
-                            [
-                                { text: 'Назад к группам', callback_data: 'view_groups' }
-                            ]
+                            [{ text: 'Назад к группам', callback_data: 'view_groups' }]
                         ]
                     }
                 });
             }
             return;
         }
+        
+        
+        
+        
+        async function removeChannelsByIdFromDB(groupId, channelIds) {
+            // Запрос на удаление каналов из указанной группы
+            const query = `
+                DELETE FROM group_channel 
+                WHERE group_id = $1 AND channel_id = ANY($2::bigint[])`;
+            const values = [groupId, channelIds];
+            await pool.query(query, values);
+        }
+        
+        
+        async function getGroupIdByName(groupName) {
+            const query = `SELECT id FROM user_group WHERE group_name = $1`; // Убедитесь, что названия таблиц и полей соответствуют вашей БД
+            const values = [groupName];
+        
+            const result = await pool.query(query, values);
+            
+            if (result.rows.length > 0) {
+                return result.rows[0].id; // Возвращаем ID группы
+            } else {
+                throw new Error(`Группа с именем "${groupName}" не найдена.`);
+            }
+        }           
+        
         
         if (data.startsWith('remove_channel_page_')) {
             const parts = data.split('_');
@@ -878,7 +924,6 @@ bot.on('callback_query', async (query) => {
                     });
                 } else {
                     try {
-                        // Обновляем название группы в базе данных
                         const client = await pool.connect();
                         const result = await client.query(
                             'UPDATE user_group SET group_name = $1 WHERE group_name = $2 AND user_id = $3',
@@ -927,23 +972,47 @@ bot.on('callback_query', async (query) => {
         
         if (data.startsWith('delete_group_')) {
             const groupName = data.split('_').pop();
-            if (groups[groupName]) {
-                delete groups[groupName];
-                await bot.editMessageText(`Группа "${groupName}" была удалена.`,{
-                    chat_id: chatId,
-                    message_id: query.message.message_id,
-                    reply_markup: {
-                        inline_keyboard: [
-                            [
-                                { text: 'Назад к группам', callback_data: 'view_groups' }
+        
+            try {
+                // Удаляем каналы из группы
+                await deleteChannelsFromGroup(groupName);
+        
+                // Удаляем группу из базы данных
+                await deleteGroupFromDB(groupName);
+        
+                // Удаляем группу из локальной структуры данных
+                if (groups[groupName]) {
+                    delete groups[groupName];
+        
+                    await bot.editMessageText(`Группа "${groupName}" и все связанные каналы были удалены.`, {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Назад к группам', callback_data: 'view_groups' }
+                                ]
                             ]
-                        ]
-                    }
-                });
-
-            } else {
-                await bot.editMessageText(`Группа "${groupName}" не найдена.`,{
-                    hat_id: chatId,
+                        }
+                    });
+        
+                } else {
+                    await bot.editMessageText(`Группа "${groupName}" не найдена.`, {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Назад к группам', callback_data: 'view_groups' }
+                                ]
+                            ]
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error("Ошибка при удалении группы из БД:", error);
+                await bot.editMessageText('Ошибка при удалении группы. Попробуйте снова.', {
+                    chat_id: chatId,
                     message_id: query.message.message_id,
                     reply_markup: {
                         inline_keyboard: [
@@ -955,6 +1024,35 @@ bot.on('callback_query', async (query) => {
                 });
             }
         }
+
+        async function GroupIdByName(groupName) {
+            const query = `SELECT id FROM user_group WHERE group_name = $1`;
+            const values = [groupName];
+            const result = await pool.query(query, values);
+            
+            if (result.rows.length > 0) {
+                return result.rows[0].id; // Предполагается, что ID группы находится в первом элементе результата
+            } else {
+                throw new Error('Группа не найдена');
+            }
+        }
+        
+        
+        async function deleteChannelsFromGroup(groupName) {
+            const groupId = await GroupIdByName(groupName); // Получаем ID группы по имени
+            const query = `DELETE FROM group_channel WHERE group_id = $1`; // Предполагаем, что у вас есть поле group_id в таблице
+            const values = [groupId];
+            await pool.query(query, values);
+        }
+        
+        
+        
+        async function deleteGroupFromDB(groupName) {
+            const query = `DELETE FROM user_group WHERE group_name = $1`;
+            const values = [groupName];
+            await pool.query(query, values);
+        }
+        
     } 
 
     catch (error) {
@@ -1185,7 +1283,6 @@ bot.on('callback_query', async (callbackQuery) => {
                     });
                 }
 
-                // Проверяем наличие видео
                 if (msg.video) {
                     mediaGroup.push({
                         type: 'video',
@@ -1260,7 +1357,6 @@ bot.on('callback_query', async (callbackQuery) => {
             return;
         }
 
-        // Запрашиваем сообщение с текстом и медиа
         await bot.sendMessage(chatId, 'Введите текст для рассылки и прикрепите медиа (фото или видео).');
 
         let mediaGroup = [];
@@ -1306,10 +1402,8 @@ bot.on('callback_query', async (callbackQuery) => {
             if (msg.media_group_id) {
                 isGroupProcessing = true;
 
-                // Очищаем предыдущий таймаут
                 clearTimeout(mediaTimeout);
 
-                // Проверяем наличие фото
                 if (msg.photo) {
                     mediaGroup.push({
                         type: 'photo',
@@ -1318,7 +1412,6 @@ bot.on('callback_query', async (callbackQuery) => {
                     });
                 }
 
-                // Проверяем наличие видео
                 if (msg.video) {
                     mediaGroup.push({
                         type: 'video',
@@ -1396,7 +1489,6 @@ bot.on('callback_query', async (callbackQuery) => {
         callbackData.startsWith !== 'toggle_channel_' &&
         callbackData.split('_')[0] !== 'toggle'
     ) {
-        // Логика выбора каналов
         if (selectedChannels.includes(callbackData)) {
             selectedChannels = selectedChannels.filter(id => id !== callbackData);
         } else {

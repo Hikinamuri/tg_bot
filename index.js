@@ -14,6 +14,8 @@ let isAwaitingChannel = false;
 let isSending = false;
 let selectedForDeletion = [];
 
+let userId;
+
 const apiKeyBot = process.env.API_KEY_BOT || console.log('Ошибка с импортом apiKeyBot');
 const bot = new TelegramBot(apiKeyBot, { polling: true });
 
@@ -35,7 +37,7 @@ bot.on('text', async (msg) => {
     try {
         // Обрабатываем команду /start
         if (msg.text.startsWith('/start')) {
-            const userId = msg.from.id;  // ID пользователя в Telegram
+            userId = msg.from.id;  // ID пользователя в Telegram
             const client = await pool.connect();
 
             try {
@@ -100,7 +102,7 @@ bot.on('message', async (msg) => {
     if (isAwaitingChannel && msg.forward_from_chat) {
         const channelId = msg.forward_from_chat.id;
         const channelTitle = msg.forward_from_chat.title || "Неизвестный канал";
-        const userId = msg.from.id;  // ID пользователя, который отправил сообщение
+        userId = msg.from.id;  // ID пользователя, который отправил сообщение
 
         channels[channelId] = channelTitle;
         isAwaitingChannel = false;
@@ -421,7 +423,7 @@ bot.on('callback_query', async (query) => {
         
             bot.once('text', async (msg) => {
                 const groupName = msg.text.trim();
-                const userId = msg.from.id;  // ID пользователя, создавшего группу
+                userId = msg.from.id;  // ID пользователя, создавшего группу
         
                 // Проверяем допустимость имени группы
                 if (!groupName || groups[groupName]) {
@@ -693,23 +695,56 @@ bot.on('callback_query', async (query) => {
         
         if (data.startsWith('confirm_add_to_group_')) {
             const groupName = data.split('_').pop();
+
             if (selectedChannels1.length > 0) {
+                const client = await pool.connect();
+                const copyGroupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
+                let copyGroups = {};
+
+                for (const row of copyGroupResult.rows) {
+                    if (!copyGroups[row.id]) {
+                        copyGroups[row.group_name] = row.id;
+                    }
+                }
                 const channelIds = selectedChannels1;
+
+                // const groupId = copyGroups.
+                const groupId = copyGroups[groupName]
+
                 groups[groupName] = [...(groups[groupName] || []), ...channelIds];
                 const channelNames = channelIds.map(id => channels[id]);
-                await bot.editMessageText(`Каналы ${channelNames.join(', ')} добавлены в группу "${groupName}".`, {
-                    chat_id: chatId,
-                    message_id: query.message.message_id,
-                    reply_markup: {
-                        inline_keyboard: [
-                            [
-                                { text: 'Назад к группам', callback_data: 'view_groups' }
-                            ]
-                        ]
+
+                try {
+                    // Вставляем каналы в таблицу group_channel
+                    for (const channelId of channelIds) {
+                        await client.query(
+                            `INSERT INTO group_channel (group_id, channel_id) 
+                            VALUES ($1, $2)
+                            ON CONFLICT (group_id, channel_id) DO NOTHING`,
+                            [groupId, channelId] // groupId и channelId
+                        );
                     }
-                });
-                selectedChannels1 = [];
-            } else {
+
+                    await bot.editMessageText(`Каналы ${channelNames.join(', ')} добавлены в группу "${groupName}".`, {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Назад к группам', callback_data: 'view_groups' }
+                                ]
+                            ]
+                        }
+                    });
+                    selectedChannels1 = [];
+                } catch (error) {
+                    console.error('Ошибка добавления каналов в группу:', error);
+                    await bot.sendMessage(chatId, 'Произошла ошибка при добавлении каналов в группу. Попробуйте еще раз.');
+                }
+                
+                client.release(); // Освобождаем соединение с базой данных
+            }
+            else {
                 await bot.editMessageText('Ошибка: не выбраны каналы для добавления.', {
                     chat_id: chatId,
                     message_id: query.message.message_id,
@@ -864,7 +899,7 @@ bot.on('callback_query', async (query) => {
         
             bot.once('text', async (msg) => {
                 const newGroupName = msg.text;
-                const userId = msg.from.id;
+                userId = msg.from.id;
                 
                 if (newGroupName === groupName) {
                     await bot.sendMessage(chatId, `Название группы осталось "${groupName}", так как оно не изменилось.`, {
@@ -1100,19 +1135,37 @@ bot.on('callback_query', async (callbackQuery) => {
 
     // Логика удаления выбранных каналов
     if (callbackData === 'remove_selected') {
-        selectedForDeletion.forEach(channelId => {
-            delete channels[channelId]; // Удаляем канал из списка
-        });
-        selectedForDeletion = []; // Очищаем список
-        await bot.sendMessage(chatId, 'Выбранные каналы успешно удалены.');
-        await bot.editMessageReplyMarkup({
-            inline_keyboard: generateChannelButtons() // Возвращаем основное меню каналов
-        }, {
-            chat_id: chatId,
-            message_id: callbackQuery.message.message_id
-        });
+        const client = await pool.connect(); // Получаем соединение с базой данных
+        
+        try {
+            for (const channelId of selectedForDeletion) {
+                delete channels[channelId]; // Удаляем канал из списка
+    
+                // Выполняем удаление канала из таблицы user_chanels
+                await client.query(
+                    `DELETE FROM user_chanels 
+                     WHERE channel_id = $1 AND user_id = $2`,
+                    [channelId, userId] // Убедитесь, что userId доступен в этом контексте
+                );
+            }
+    
+            selectedForDeletion = []; // Очищаем список
+            await bot.sendMessage(chatId, 'Выбранные каналы успешно удалены.');
+            await bot.editMessageReplyMarkup({
+                inline_keyboard: generateChannelButtons() // Возвращаем основное меню каналов
+            }, {
+                chat_id: chatId,
+                message_id: callbackQuery.message.message_id
+            });
+        } catch (error) {
+            console.error('Ошибка удаления каналов:', error);
+            await bot.sendMessage(chatId, 'Произошла ошибка при удалении каналов. Попробуйте еще раз.');
+        } finally {
+            client.release(); // Освобождаем соединение с базой данных
+        }
         return; // Завершаем обработку
     }
+    
 
     if (callbackData === 'add_channel') {
         isAwaitingChannel = true;

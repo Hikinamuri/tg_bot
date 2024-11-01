@@ -84,7 +84,7 @@ bot.on('text', async (msg) => {
                 } else {
                     // Если пользователь не найден, добавляем его
                     const defaultRole = false;  // Роль по умолчанию
-                    await client.query('INSERT INTO users (user_id, role) VALUES ($1, $2)', [userId, defaultRole]);
+                    await client.query(`INSERT INTO users (user_id, role) VALUES ($1, $2)`, [userId, defaultRole]);
 
                     await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
                 }
@@ -112,9 +112,12 @@ bot.on('message', async (msg) => {
         try {
             // Вставляем данные в таблицу user_channels
             await client.query(
-                'INSERT INTO user_chanels (user_id, channel_id, channel_name) VALUES ($1, $2, $3)',
+                `INSERT INTO user_chanels (user_id, channel_id, channel_name) 
+                 VALUES ($1, $2, $3) 
+                 ON CONFLICT (user_id, channel_id) DO NOTHING`,
                 [userId, channelId, channelTitle]
-            );
+            );            
+            
             await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен в базу данных.`);
         } catch (error) {
             console.error('Ошибка при добавлении канала в базу данных:', error);
@@ -458,7 +461,8 @@ bot.on('callback_query', async (query) => {
                             await client.query(
                                 `INSERT INTO group_channel 
                                  (group_id, channel_id)
-                                 VALUES ($1, $2)`,
+                                 VALUES ($1, $2)
+                                 ON CONFLICT (group_id, channel_id) DO NOTHING`,
                                 [groupId, channelId]
                             );
                         }
@@ -701,17 +705,28 @@ bot.on('callback_query', async (query) => {
                 const copyGroupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
                 let copyGroups = {};
 
+                // Сохраняем группы в словаре
                 for (const row of copyGroupResult.rows) {
                     if (!copyGroups[row.id]) {
                         copyGroups[row.group_name] = row.id;
                     }
                 }
+
                 const channelIds = selectedChannels1;
+                const groupId = copyGroups[groupName];
 
-                // const groupId = copyGroups.
-                const groupId = copyGroups[groupName]
+                // Инициализируем массив, если он не существует
+                if (!groups[groupName]) {
+                    groups[groupName] = [];
+                }
 
-                groups[groupName] = [...(groups[groupName] || []), ...channelIds];
+                // Добавляем каналы, избегая дублирования
+                for (const channelId of channelIds) {
+                    if (!groups[groupName].includes(channelId)) {
+                        groups[groupName].push(channelId);
+                    }
+                }
+
                 const channelNames = channelIds.map(id => channels[id]);
 
                 try {
@@ -744,6 +759,7 @@ bot.on('callback_query', async (query) => {
                 
                 client.release(); // Освобождаем соединение с базой данных
             }
+
             else {
                 await bot.editMessageText('Ошибка: не выбраны каналы для добавления.', {
                     chat_id: chatId,

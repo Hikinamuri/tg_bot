@@ -8,7 +8,7 @@ let groups = {};
 let selectedChannels1 = [];
 let selectedChannelsForRemoval = [];
 let toggleChannels = [];
-const ITEMS_PER_PAGE = 1; 
+const ITEMS_PER_PAGE = 2; 
 let pendingMedia = [];
 let isAwaitingChannel = false;
 let isSending = false;
@@ -209,7 +209,6 @@ const generateGroupButtons = () => {
 const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) => {
     const channelIdsInGroup = (groups[groupName] || []).slice();
 
-
     channelIdsInGroup.sort((a, b) => {
         const titleA = channels[a]?.toLowerCase() || '';
         const titleB = channels[b]?.toLowerCase() || '';
@@ -219,10 +218,7 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
     const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
     const endIdx = startIdx + ITEMS_PER_PAGE;
     const channelsOnPage = channelIdsInGroup.slice(startIdx, endIdx);
-
-    console.log(groups[groupName])
-    console.log(channelsOnPage)
-
+    
     const channelButtons = channelsOnPage.map((channelId) => {
         const title = channels[channelId];
         const isSelected = toggleChannels.includes(channelId);
@@ -550,7 +546,8 @@ bot.on('callback_query', async (query) => {
         
                 const startChannel = (currentPage - 1) * ITEMS_PER_PAGE + 1;
                 const endChannel = Math.min(currentPage * ITEMS_PER_PAGE, totalChannels);
-        
+                toggleChannels = []
+
                 await bot.editMessageText( 
                     `Группа "${groupName}" содержит следующие каналы (страница ${currentPage} из ${totalPages}, показываются ${startChannel}-${endChannel} из ${totalChannels}):`,
                     {
@@ -1028,6 +1025,45 @@ bot.onText(/\/channels/, async (msg) => {
     });
 });
 
+function formatTextWithEntities(text, entities) {
+    let formattedText = text;
+    entities.reverse().forEach(entity => {
+        const { offset, length, type } = entity;
+        const entityText = formattedText.slice(offset, offset + length);
+        
+        let formattedEntity;
+        switch (type) {
+            case 'bold':
+                formattedEntity = `<b>${entityText}</b>`;
+                break;
+            case 'italic':
+                formattedEntity = `<i>${entityText}</i>`;
+                break;
+            case 'underline':
+                formattedEntity = `<u>${entityText}</u>`;
+                break;
+            case 'strikethrough':
+                formattedEntity = `<s>${entityText}</s>`;
+                break;
+            case 'code':
+                formattedEntity = `<code>${entityText}</code>`;
+                break;
+            case 'pre':
+                formattedEntity = `<pre>${entityText}</pre>`;
+                break;
+            case 'text_link':
+                formattedEntity = `<a href="${entity.url}">${entityText}</a>`;
+                break;
+            default:
+                formattedEntity = entityText;
+        }
+
+        formattedText = formattedText.slice(0, offset) + formattedEntity + formattedText.slice(offset + length);
+    });
+
+    return formattedText;
+}
+
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const callbackData = callbackQuery.data;
@@ -1103,10 +1139,21 @@ bot.on('callback_query', async (callbackQuery) => {
                 isSending = true;
                 for (const channelId of channelsToSend) {
                     try {
-                        // const channelTitle = channels[channelId];
-                        // mediaGroup[0].caption += `\n\nПодписывайтесь на канал - ${channelTitle}`
-                        
-                        await bot.sendMediaGroup(channelId, mediaGroup);
+                        const channelTitle = channels[channelId];
+
+                        const copyMediaGroup = mediaGroup.map((item, index) => {
+                            let newItem = { ...item };
+                    
+                            if (index === 0) {
+                                newItem.caption = `${item.caption}\n\nПодписывайтесь на канал - ${channelTitle}`;
+                            }
+                    
+                            return newItem;
+                        });
+                    
+                        console.log(copyMediaGroup);
+                    
+                        await bot.sendMediaGroup(channelId, copyMediaGroup);
                         selectedChannels = []
                     } catch (error) {
                         console.error(`Ошибка отправки в канал ${channelId}:`, error);
@@ -1153,12 +1200,16 @@ bot.on('callback_query', async (callbackQuery) => {
                 await finalizeMediaGroup();
             } else if (!isGroupProcessing) {
                 let mediaToSend = [];
+                const originalText = msg.text || msg.caption || '';
+                // const textToSend = `${formatTextWithEntities(originalText, msg.entities || [])}\n\nПодписывайтесь на канал - ${channelTitle}`;
+                const textToSend = `${formatTextWithEntities(originalText, msg.entities || [])}`;
+
 
                 if (msg.photo) {
                     mediaToSend.push({
                         type: 'photo',
                         media: msg.photo[msg.photo.length - 1].file_id,
-                        caption: textToSend
+                        caption: textToSend ? textToSend : ''
                     });
                 }
 
@@ -1173,12 +1224,13 @@ bot.on('callback_query', async (callbackQuery) => {
                 if (mediaToSend.length === 0) {
                     for (const channelId of channelsToSend) {
                         const channelTitle = channels[channelId];
-                        const textToSend = `${msg.text || msg.caption || ''}\n\nПодписывайтесь на канал - ${channelTitle}`;
-
+                        const originalText = msg.text || msg.caption || '';
+                        const textToSend = `${formatTextWithEntities(originalText, msg.entities || [])}\n\nПодписывайтесь на канал - <b>${channelTitle}</b>`;
+                    
                         try {
-                            await bot.sendMessage(channelId, textToSend);
-                            await bot.sendMessage(chatId, 'Текст успешно отправлен.');
-                            selectedChannels = []
+                            await bot.sendMessage(channelId, textToSend, { parse_mode: 'HTML' });
+                            await bot.sendMessage(chatId, 'Текст успешно отправлен.', { parse_mode: 'HTML' });
+                            selectedChannels = [];
                         } catch (error) {
                             console.error(`Ошибка отправки в канал ${channelId}:`, error);
                         }
@@ -1220,10 +1272,21 @@ bot.on('callback_query', async (callbackQuery) => {
                 isSending = true;
                 for (const channelId of channelsToSend) {
                     try {
-                        // const channelTitle = channels[channelId];
-                        // mediaGroup[0].caption += `\n\nПодписывайтесь на канал - ${channelTitle}`
-                        
-                        await bot.sendMediaGroup(channelId, mediaGroup);
+                        const channelTitle = channels[channelId];
+
+                        const copyMediaGroup = mediaGroup.map((item, index) => {
+                            let newItem = { ...item };
+                    
+                            if (index === 0) {
+                                newItem.caption = `${item.caption}\n\nПодписывайтесь на канал - ${channelTitle}`;
+                            }
+                    
+                            return newItem;
+                        });
+                    
+                        console.log(copyMediaGroup);
+                    
+                        await bot.sendMediaGroup(channelId, copyMediaGroup);
                         selectedChannels = []
                     } catch (error) {
                         console.error(`Ошибка отправки в канал ${channelId}:`, error);
@@ -1329,7 +1392,9 @@ bot.on('callback_query', async (callbackQuery) => {
         callbackData.split('_')[0] !== 'select' &&
         callbackData.split('_')[0] !== 'send'  &&
         callbackData.split('_')[0] !== 'edit'  &&
-        callbackData.split('_')[0] !== 'remove'
+        callbackData.split('_')[0] !== 'remove' &&
+        callbackData.startsWith !== 'toggle_channel_' &&
+        callbackData.split('_')[0] !== 'toggle'
     ) {
         // Логика выбора каналов
         if (selectedChannels.includes(callbackData)) {

@@ -867,6 +867,7 @@ bot.on('callback_query', async (query) => {
         
             bot.once('text', async (msg) => {
                 const newGroupName = msg.text;
+                const userId = msg.from.id;
                 
                 if (newGroupName === groupName) {
                     await bot.sendMessage(chatId, `Название группы осталось "${groupName}", так как оно не изменилось.`, {
@@ -879,18 +880,50 @@ bot.on('callback_query', async (query) => {
                         }
                     });
                 } else {
-                    groups[newGroupName] = groups[groupName]; 
-                    delete groups[groupName];
+                    try {
+                        // Обновляем название группы в базе данных
+                        const client = await pool.connect();
+                        const result = await client.query(
+                            'UPDATE user_group SET group_name = $1 WHERE group_name = $2 AND user_id = $3',
+                            [newGroupName, groupName, userId]
+                        );
         
-                    await bot.sendMessage(chatId, `Название группы изменено на "${newGroupName}".`, {
-                        reply_markup: {
-                            inline_keyboard: [
-                                [
-                                    { text: 'Назад к группам', callback_data: 'view_groups' }
-                                ]
-                            ]
+                        if (result.rowCount > 0) {
+                            groups[newGroupName] = groups[groupName]; 
+                            delete groups[groupName];
+        
+                            await bot.sendMessage(chatId, `Название группы изменено на "${newGroupName}".`, {
+                                reply_markup: {
+                                    inline_keyboard: [
+                                        [
+                                            { text: 'Назад к группам', callback_data: 'view_groups' }
+                                        ]
+                                    ]
+                                }
+                            });
+                        } else {
+                            await bot.sendMessage(chatId, `Ошибка при изменении названия группы. Попробуйте снова.`, {
+                                reply_markup: {
+                                    inline_keyboard: [
+                                        [
+                                            { text: 'Назад к группам', callback_data: 'view_groups' }
+                                        ]
+                                    ]
+                                }
+                            });
                         }
-                    });
+                    } catch (error) {
+                        console.error('Ошибка при обновлении группы в базе данных:', error);
+                        await bot.sendMessage(chatId, `Ошибка при изменении названия группы.`, {
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [
+                                        { text: 'Назад к группам', callback_data: 'view_groups' }
+                                    ]
+                                ]
+                            }
+                        });
+                    }
                 }
             });
         }

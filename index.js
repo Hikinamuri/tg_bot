@@ -37,6 +37,7 @@ bot.on('text', async (msg) => {
     try {
         // Обрабатываем команду /start
         if (msg.text.startsWith('/start')) {
+            console.log(msg)
             userId = msg.from.id;  // ID пользователя в Telegram
             const client = await pool.connect();
 
@@ -73,6 +74,61 @@ bot.on('text', async (msg) => {
                         }
 
                         await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас есть полный доступ.`);
+                        
+                        // Логируем объекты для проверки
+                        console.log('Channels:', channels);
+                        console.log('Groups:', groups);
+
+                    } else {
+                        await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас нет полного доступа.`);
+                    }
+                } else {
+                    // Если пользователь не найден, добавляем его
+                    const defaultRole = false;  // Роль по умолчанию
+                    await client.query(`INSERT INTO users (user_id, role) VALUES ($1, $2)`, [userId, defaultRole]);
+
+                    await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
+                }
+            } finally {
+                client.release();  // Освобождаем соединение с базой данных
+            }
+            return;
+        } else if (msg.text.startsWith('/channels' || msg.text.startsWith('/groups'))) {
+            console.log(msg)
+            userId = msg.from.id;  // ID пользователя в Telegram
+            const client = await pool.connect();
+
+            try {
+                const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
+
+                if (result.rows.length > 0) {
+                    const userRole = result.rows[0].role;
+                    
+                    if (userRole === true) {
+                        // Пользователь найден и имеет роль с полными правами (role === true)
+
+                        // Запрос к таблице user_channels
+                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels WHERE user_id = $1', [userId]);
+                        channels = {};
+
+                        for (const row of channelResult.rows) {
+                            channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
+                        }
+
+                        // Запрос к таблице user_groups
+                        const groupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
+                        groups = {};
+
+                        for (const row of groupResult.rows) {
+                            if (!groups[row.group_name]) {
+                                groups[row.group_name] = [];
+                            }
+                            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
+
+                            for (const row1 of groupChannels.rows) {
+                                groups[row.group_name].push(row1.channel_id);  // Сохраняем имя группы и id в объект
+                            }
+                        }
                         
                         // Логируем объекты для проверки
                         console.log('Channels:', channels);
@@ -1258,8 +1314,33 @@ bot.on('callback_query', async (callbackQuery) => {
                 // Выполняем удаление канала из таблицы user_chanels
                 await client.query(
                     `DELETE FROM user_chanels 
-                     WHERE channel_id = $1 AND user_id = $2`,
-                    [channelId, userId] // Убедитесь, что userId доступен в этом контексте
+                     WHERE channel_id = $1 AND user_id = $2 RETURNING channel_name`,
+                    [channelId, userId]
+                );
+                // if (result.rows.length === 0) {
+                //     console.log('Канал не найден или уже удален.');
+                //     return;
+                // }
+
+                // const channelName = result.rows[0].channel_name;
+                // console.log(channelName);
+
+                // const groupIdResult = await client.query(
+                //     'SELECT id FROM user_group WHERE user_id = $1 AND group_name = $2',
+                //     [userId, channelName]  // Use channelName instead of grouplName
+                // );
+
+                // if (groupIdResult.rows.length === 0) {
+                //     console.log('Группа не найдена.');
+                //     return;
+                // }
+
+                // const groupId = groupIdResult.rows[0].id;
+
+                await client.query(
+                    `DELETE FROM group_channel 
+                    WHERE channel_id = $1`,
+                    [channelId]
                 );
             }
     

@@ -184,36 +184,106 @@ bot.on('message', async (msg) => {
     }
 });
 
-const generateChannelButtons = () => {
-    const channelButtons = Object.entries(channels).map(([id, title]) => {
-        return [{
-            text: `${title} ${selectedChannels.includes(id) ? '✅' : ''}`,
-            callback_data: id
-        }];
+const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
+    // Сортируем каналы в алфавитном порядке по названиям
+    const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
+        return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
     });
 
-    console.log('Channels:', channels);
+    // Определяем общее количество страниц
+    const totalChannels = sortedChannels.length;
+    const totalPages = Math.ceil(totalChannels / itemsPerPage);
 
-    channelButtons.push([{ text: 'Добавить канал', callback_data: 'add_channel' }]);
-    channelButtons.push([{ text: 'Удалить каналы', callback_data: 'delete_channel' }]);
-    channelButtons.push([{ text: 'Выбрать все каналы', callback_data: 'select_all' }]);
-    channelButtons.push([{ text: 'Отправить сообщение ✅', callback_data: 'send_message' }]);
+    // Получаем каналы для текущей страницы
+    const startIndex = (page - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const currentPageChannels = sortedChannels.slice(startIndex, endIndex);
 
-    return channelButtons;
-}
+    // Генерируем кнопки для текущей страницы
+    const channelButtons = currentPageChannels.map(([id, title]) => ({
+        text: `${selectedChannels.includes(id) ? '✅' : '⬜️'} ${title}`, // Добавляем отметку выбора
+        callback_data: `${id}_${page}` // Передаем id канала и текущую страницу
+    }));
 
-const generateDeleteButtons = () => {
-    const channelButtons = Object.entries(channels).map(([id, title]) => {
+    // Добавляем навигационные кнопки
+    const navigationButtons = [];
+    if (page > 1) {
+        navigationButtons.push({ text: '⬅️ Предыдущая', callback_data: `spage_${page - 1}` });
+    }
+    if (page < totalPages) {
+        navigationButtons.push({ text: 'Следующая ➡️', callback_data: `spage_${page + 1}` });
+    }
+
+    // Формируем кнопку навигации, если она существует
+    const navigationRow = navigationButtons.length > 0 ? [navigationButtons] : [];
+
+    // Добавляем кнопки действий в виде отдельных строк
+    const actionButtons = [
+        [
+            { text: '➕ Добавить канал', callback_data: 'add_channel' },
+            { text: '🗑️ Удалить каналы', callback_data: 'delete_channel' }
+        ],
+        [
+            { text: '✅ Выбрать все каналы', callback_data: 'select_all' },
+            { text: '📤 Отправить сообщение', callback_data: 'send_message' }
+        ]
+    ];
+
+
+    // Собираем все кнопки в один массив, включаем навигацию и действия
+    return [
+        ...channelButtons.map(button => [button]), // Оборачиваем каждую кнопку в массив для строки
+        ...navigationRow, // Добавляем навигацию, если есть
+        [],
+        ...actionButtons // Добавляем кнопки действия
+    ];
+};
+
+
+
+
+const generateDeleteButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
+    // Сортируем каналы в алфавитном порядке по названиям
+    const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
+        return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
+    });
+
+    // Определяем общее количество страниц
+    const totalChannels = sortedChannels.length;
+    const totalPages = Math.ceil(totalChannels / itemsPerPage);
+
+    // Получаем каналы для текущей страницы
+    const startIndex = (page - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const currentPageChannels = sortedChannels.slice(startIndex, endIndex);
+
+    // Генерируем кнопки для текущей страницы
+    const channelButtons = currentPageChannels.map(([id, title]) => {
         return [{
             text: `${title} ${selectedForDeletion.includes(id) ? '❌' : ''}`,
-            callback_data: `delete_${id}`  // Изменяем callback_data для кнопок удаления
+            callback_data: `delete_${id}_${page}` // Добавляем текущую страницу к callback_data
         }];
     });
 
+    // Добавляем навигационные кнопки
+    if (page > 1) {
+        channelButtons.push([{ text: '⬅️ Предыдущая', callback_data: `delete_page_${page - 1}` }]);
+    }
+    if (page < totalPages) {
+        channelButtons.push([{ text: 'Следующая ➡️', callback_data: `delete_page_${page + 1}` }]);
+    }
+
+    // Добавляем кнопку для удаления выбранных
     channelButtons.push([{ text: 'Удалить выбранные', callback_data: 'remove_selected' }]);
 
-    return channelButtons;
-}
+    // Информация о странице
+    const pageInfoText = `Выберите каналы для удаления:\n\nСтраница ${page} из ${totalPages} (всего каналов: ${totalChannels})`;
+
+    return { inline_keyboard: channelButtons, pageInfoText }; // Возвращаем и кнопки, и текст с информацией о странице
+};
+
+
+
 
 const generateGroupChannelButtons = (currentPage = 1) => {
     const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
@@ -280,12 +350,13 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
     const endIdx = startIdx + ITEMS_PER_PAGE;
     const channelsOnPage = channelIdsInGroup.slice(startIdx, endIdx);
     
+    // Генерация кнопок для каналов с эмодзи
     const channelButtons = channelsOnPage.map((channelId) => {
         const title = channels[channelId];
         const isSelected = toggleChannels.includes(channelId);
 
         return [{
-            text: `${title} ${isSelected ? '✅' : '⬜️'}`,
+            text: `${isSelected ? '✅' : '⬜️'} ${title}`,
             callback_data: `toggle_channel_${channelId}_${groupName}_${currentPage}`
         }];
     });
@@ -299,22 +370,34 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
         navigationButtons.push({ text: 'Следующая ➡️', callback_data: `view_group_${groupName}_${currentPage + 1}` });
     }
 
+    // Кнопка выбора всех/убрать всех каналов с эмодзи
     const selectAllButton = [{
-        text: toggleChannels.length === channelIdsInGroup.length ? 'Убрать все каналы' : 'Выбрать все каналы',
+        text: `${toggleChannels.length === channelIdsInGroup.length ? '❌ Убрать все каналы' : '✅ Выбрать все каналы'}`,
         callback_data: `select_all_channels_${groupName}_${toggleChannels.length === channelIdsInGroup.length ? 'deselect' : 'select'}_${currentPage}`
     }];
+
+    // Кнопки действий в два столбца с эмодзи
+    const actionButtons = [
+        [
+            { text: '⚙️ Настройки группы', callback_data: `settings_group_${groupName}` },
+            { text: '🔙 Назад к группам', callback_data: 'view_groups' }
+        ],
+        [
+            { text: '🏠 Главное меню', callback_data: 'main_menu' },
+            { text: '📤 Отправить в группу', callback_data: 'send_in_group' }
+        ]
+    ];
     
 
+    // Объединение всех кнопок в один массив
     return [
         ...channelButtons,
-        navigationButtons.length > 0 ? navigationButtons : [],
-        [{ text: 'Настройки группы', callback_data: `settings_group_${groupName}` }],
+        navigationButtons.length > 0 ? [navigationButtons] : [], // Добавляем навигацию, если есть
         selectAllButton,
-        [{ text: 'Назад к группам', callback_data: 'view_groups' }],
-        [{ text: 'Главное меню', callback_data: 'main_menu' }],
-        [{ text: 'Отправить в группу', callback_data: 'send_in_group' }]
+        ...actionButtons // Добавляем кнопки действий
     ];
 };
+
 
 
 const generateAddChannelButtonsForGroup = (groupName, currentPage = 1) => {
@@ -424,6 +507,7 @@ bot.on('callback_query', async (query) => {
             return;
         }
         
+
         if (data.startsWith('view_page_')) {
             const currentPage = parseInt(data.split('_')[2]) || 1; 
         
@@ -1179,20 +1263,21 @@ bot.on('callback_query', async (query) => {
             reply_markup: {
                 inline_keyboard: [
                     [
-                        { text: 'Добавить канал', callback_data: `add_channel_to_group_${groupName}` },
-                        { text: 'Удалить канал', callback_data: `remove_channel_from_group_${groupName}` }
+                        { text: '➕ Добавить канал', callback_data: `add_channel_to_group_${groupName}` },
+                        { text: '🗑️ Удалить канал', callback_data: `remove_channel_from_group_${groupName}` }
                     ],
                     [
-                        { text: 'Изменить название группы', callback_data: `edit_group_${groupName}` },
-                        { text: 'Удалить группу', callback_data: `delete_group_${groupName}` }
+                        { text: '✏️ Изменить название группы', callback_data: `edit_group_${groupName}` },
+                        { text: '❌ Удалить группу', callback_data: `delete_group_${groupName}` }
                     ],
                     [
-                        { text: 'Назад к каналам', callback_data: `view_group_${groupName}_1` }
+                        { text: '🔙 Назад к каналам', callback_data: `view_group_${groupName}_1` }
                     ]
                 ]
             }
         });
     }
+    
 
     if (data === 'main_menu') {
         const chatId = query.message.chat.id; 
@@ -1285,35 +1370,84 @@ bot.on('callback_query', async (callbackQuery) => {
 
     if (callbackData === 'delete_channel') {
         selectedForDeletion = []; // Сбрасываем выбранные для удаления каналы
-        await bot.sendMessage(chatId, 'Выберите каналы для удаления:', {
+        
+        // Генерируем кнопки для удаления, чтобы получить информацию о страницах
+        const { inline_keyboard, pageInfoText } = generateDeleteButtons(1); // Передаем 1, если хотите показать первую страницу
+    
+        // Изменяем сообщение
+        await bot.editMessageText(pageInfoText, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id, // Идентификатор сообщения, которое нужно редактировать
             reply_markup: {
-                inline_keyboard: generateDeleteButtons()
+                inline_keyboard: inline_keyboard // Генерируем кнопки для удаления
             }
         });
         return;
     }
+    
+    
 
     if (callbackData.startsWith('delete_')) {
-        const channelId = callbackData.split('_')[1];
-
+        const [action, channelId, page] = callbackData.split('_'); // Извлекаем все части callback_data
+    
         // Логика для добавления/удаления канала из списка выбранных для удаления
         if (selectedForDeletion.includes(channelId)) {
             selectedForDeletion = selectedForDeletion.filter(id => id !== channelId);
         } else {
             selectedForDeletion.push(channelId);
         }
-
-        await bot.editMessageReplyMarkup({
-            inline_keyboard: generateDeleteButtons()
-        }, {
+    
+        // Генерируем кнопки и текст информации о текущей странице
+        const { inline_keyboard, pageInfoText } = generateDeleteButtons(parseInt(page), ITEMS_PER_PAGE); // Передаем текущую страницу
+    
+        // Изменяем сообщение
+        await bot.editMessageText(pageInfoText, {
             chat_id: chatId,
-            message_id: callbackQuery.message.message_id
+            message_id: callbackQuery.message.message_id, // Идентификатор сообщения, которое нужно редактировать
+            reply_markup: {
+                inline_keyboard // Используем корректный формат для inline_keyboard
+            }
         });
-
+    
         return;
     }
+    
+    
+    if (callbackData.startsWith('delete_page_')) {
+        const currentPage = parseInt(callbackData.split('_')[2], 10); // Извлекаем текущую страницу
+    
+        // Генерируем кнопки для текущей страницы
+        const { inline_keyboard, pageInfoText } = generateDeleteButtons(currentPage, ITEMS_PER_PAGE);
+    
+        // Изменяем сообщение
+        await bot.editMessageText(pageInfoText, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id, // Идентификатор сообщения, которое нужно редактировать
+            reply_markup: {
+                inline_keyboard // Используем корректный формат для inline_keyboard
+            }
+        });
+        return;
+    }
+    
 
 
+    if (callbackData.startsWith('spage_')) {
+        const currentPage = parseInt(callbackData.split('_')[1]) || 1;
+        const totalChannels = Object.keys(channels).length;
+        const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+        const pageInfoText = `Выберите каналы для отправки:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
+    
+        await bot.editMessageText(pageInfoText, {
+            chat_id: chatId,
+            message_id: callbackQuery.message.message_id,
+            reply_markup: {
+                inline_keyboard: generateChannelButtons(currentPage, ITEMS_PER_PAGE)
+            }
+        });
+        return;
+    }
+    
 
     // Логика удаления выбранных каналов
     if (callbackData === 'remove_selected') {
@@ -1724,18 +1858,24 @@ bot.on('callback_query', async (callbackQuery) => {
         callbackData.startsWith !== 'toggle_channel_' &&
         callbackData.split('_')[0] !== 'toggle'
     ) {
-        if (selectedChannels.includes(callbackData)) {
-            selectedChannels = selectedChannels.filter(id => id !== callbackData);
+
+        const [channelId, page] = callbackData.split('_'); // Извлекаем id канала и текущую страницу
+        const currentPage = parseInt(page) || 1; // Сохраняем текущую страницу
+        if (selectedChannels.includes(channelId)) {
+            selectedChannels = selectedChannels.filter(id => id !== channelId); // Удаляем из выбранных
         } else {
-            selectedChannels.push(callbackData);
+            selectedChannels.push(channelId); // Добавляем в выбранные
         }
 
+        // Обновляем клавиатуру, сохраняя текущую страницу
         await bot.editMessageReplyMarkup({
-            inline_keyboard: generateChannelButtons()
+            inline_keyboard: generateChannelButtons(currentPage, ITEMS_PER_PAGE) // Передаем текущую страницу
         }, {
             chat_id: chatId,
             message_id: callbackQuery.message.message_id
         });
+    
+        return;
     }
 });
 

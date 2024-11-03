@@ -155,10 +155,14 @@ bot.on('text', async (msg) => {
 });
 
 bot.on('message', async (msg) => {
+    // Получаем ID бота при старте
+    const botInfo = await bot.getMe();
+    const botId = botInfo.id;
+
     if (isAwaitingChannel && msg.forward_from_chat) {
         const channelId = msg.forward_from_chat.id;
         const channelTitle = msg.forward_from_chat.title || "Неизвестный канал";
-        userId = msg.from.id;  // ID пользователя, который отправил сообщение
+        const userId = msg.from.id;  // ID пользователя, который отправил сообщение
 
         channels[channelId] = channelTitle;
         isAwaitingChannel = false;
@@ -166,14 +170,34 @@ bot.on('message', async (msg) => {
         // Подключаемся к базе данных и добавляем запись
         const client = await pool.connect();
         try {
+            // Проверяем, что бот может отправлять сообщения в канал
+            let canSendMessages = false;
+            try {
+                const member = await bot.getChatMember(channelId, botId);
+                canSendMessages = member.status === 'administrator' && member.can_post_messages;
+            } catch (error) {
+                if (error.response && error.response.statusCode === 403) {
+                    // Если бот не состоит в канале, отправляем сообщение пользователю
+                    await bot.sendMessage(msg.chat.id, `Бот не является участником канала "${channelTitle}", поэтому его нельзя добавить в базу данных.`);
+                    return;
+                } else {
+                    throw error;  // Перебрасываем ошибку, если она не связана с правами доступа
+                }
+            }
+            
+            if (!canSendMessages) {
+                await bot.sendMessage(msg.chat.id, `Бот не имеет прав на отправку сообщений в канал "${channelTitle}", поэтому его нельзя добавить в базу данных.`);
+                return;
+            }
+
             // Вставляем данные в таблицу user_channels
             await client.query(
                 `INSERT INTO user_chanels (user_id, channel_id, channel_name) 
                  VALUES ($1, $2, $3) 
                  ON CONFLICT (user_id, channel_id) DO NOTHING`,
                 [userId, channelId, channelTitle]
-            );            
-            
+            );
+
             await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен в базу данных.`);
         } catch (error) {
             console.error('Ошибка при добавлении канала в базу данных:', error);
@@ -183,6 +207,7 @@ bot.on('message', async (msg) => {
         }
     }
 });
+
 
 const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     // Сортируем каналы в алфавитном порядке по названиям
@@ -1677,10 +1702,33 @@ bot.on('callback_query', async (callbackQuery) => {
 
         bot.on('message', handleMediaMessage);
     } else if (callbackData === 'select_all') {
-        selectedChannels = Object.keys(channels);
-        await bot.sendMessage(chatId, 'Выбраны все каналы.');
-        bot.emit('channels', callbackQuery.message);
-    } else if (callbackData === 'send_in_group') {
+        if (selectedChannels.length === Object.keys(channels).length) {
+            // Если все каналы уже выбраны, отменяем выбор
+            selectedChannels = [];
+            
+            // Обновляем текст сообщения
+            await bot.editMessageText('Выбор отменен. Ни один канал не выбран.', {
+                chat_id: chatId,
+                message_id: callbackQuery.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateChannelButtons() // Обновляем кнопки
+                }
+            });
+        } else {
+            // Если не все каналы выбраны, выбираем все
+            selectedChannels = Object.keys(channels);
+            
+            // Обновляем текст сообщения
+            await bot.editMessageText('Выбраны все каналы.', {
+                chat_id: chatId,
+                message_id: callbackQuery.message.message_id,
+                reply_markup: {
+                    inline_keyboard: generateChannelButtons() // Обновляем кнопки
+                }
+            });
+        }
+    }
+     else if (callbackData === 'send_in_group') {
         const channelsToSend = toggleChannels;
         if (channelsToSend.length === 0) {
             await bot.sendMessage(chatId, 'Нет выбранных каналов.');

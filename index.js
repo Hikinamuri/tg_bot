@@ -76,8 +76,6 @@ bot.on('text', async (msg) => {
                         await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас есть полный доступ.`);
                         
                         // Логируем объекты для проверки
-                        console.log('Channels:', channels);
-                        console.log('Groups:', groups);
 
                     } else {
                         await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас нет полного доступа.`);
@@ -131,8 +129,6 @@ bot.on('text', async (msg) => {
                         }
                         
                         // Логируем объекты для проверки
-                        console.log('Channels:', channels);
-                        console.log('Groups:', groups);
 
                     } else {
                         await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас нет полного доступа.`);
@@ -191,8 +187,6 @@ const generateChannelButtons = () => {
             callback_data: id
         }];
     });
-
-    console.log('Channels:', channels);
 
     channelButtons.push([{ text: 'Добавить канал', callback_data: 'add_channel' }]);
     channelButtons.push([{ text: 'Удалить каналы', callback_data: 'delete_channel' }]);
@@ -1213,7 +1207,6 @@ bot.on('callback_query', async (query) => {
 bot.onText(/\/channels/, async (msg) => {
     const chatId = msg.chat.id;
 
-    console.log('channels', channels)
     if (Object.keys(channels).length === 0) {
         await bot.sendMessage(chatId, 'Пока нет доступных каналов.', {
             reply_markup: {
@@ -1398,38 +1391,105 @@ bot.on('callback_query', async (callbackQuery) => {
         const finalizeMediaGroup = async () => {
             if (mediaGroup.length > 0) {
                 isSending = true;
+                const originalMessage = mediaGroup[0];
+                const fromChatId = originalMessage.fromChatId;
+                const messageId = originalMessage.messageId;
+
+                console.log ('fromChatId', fromChatId, messageId)
                 for (const channelId of channelsToSend) {
                     try {
-                        const channelTitle = channels[channelId];
-                        const channelUsername = await getChannelUsernameById(channelId);
-    
-                        if (!channelUsername) {
-                            console.error(`Канал с ID ${channelId} не имеет username.`);
-                            continue;
+                        if (fromChatId && messageId) {
+                            try {
+                                const copyMediaGroup = mediaGroup.map((item) => {
+                                    return { ...item };
+                                });
+                        
+                                if (copyMediaGroup.length === 1) {
+                                    await bot.forwardMessage(channelId, fromChatId, mediaGroup[0].messageId);
+                                } else {
+                                    const copyMediaGroup = mediaGroup.map((item) => {
+                                        return { ...item };
+                                    });
+                                    const channelUsername = await getChannelUsernameById(fromChatId)
+                                    const originalMessageText = originalMessage.caption || 'Текст сообщения недоступен';
+                                    const fromChatTitle = originalMessage.fromChatTitle || 'Неизвестный источник';
+                                    console.log('channelUsername', channelUsername)
+                                    const fromChatLink = `https://t.me/${channelUsername}`;
+                            
+                                    // Строим сообщение с шапкой
+                                    const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${originalMessageText}`;
+                                    
+                                    const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
+
+                                    const messageId = sentMessage[0].message_id;
+
+                                    await bot.editMessageCaption(messageText, {
+                                        chat_id: channelId,
+                                        message_id: messageId,
+                                        parse_mode: 'Markdown'
+                                    });
+                                }
+                                selectedChannels = [];
+                                return;
+                            }
+                            catch (error) {
+                                console.error(`Ошибка пересылки в канал ${channelId}:`, error);
+                                const copyMediaGroup = mediaGroup.map((item) => {
+                                    return { ...item };
+                                });
+                        
+                                const originalMessageText = originalMessage.caption || 'Текст сообщения недоступен';
+                                const fromChatTitle = originalMessage.fromChatTitle || 'Неизвестный источник';
+                                const fromChatLink = `https://t.me/${fromChatTitle}`;
+                        
+                                // Строим сообщение с шапкой
+                                const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${originalMessageText}`;
+                                
+                                const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
+                                const messageId = sentMessage[0].message_id;
+
+                                await bot.editMessageCaption(messageText, {
+                                    chat_id: channelId,
+                                    message_id: messageId,
+                                    parse_mode: 'Markdown'
+                                });
+
+                                selectedChannels = [];
+                            }
+                                
                         }
-    
-                        const copyMediaGroup = mediaGroup.map((item) => {
-                            return { ...item };
-                        });
-    
-                        const originalMessageText = copyMediaGroup[0].caption;
-    
-                        const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
-    
-                        const hyperlinkText = `${originalMessageText}\n\nПодписывайтесь на канал - [${channelTitle}](https://t.me/${channelUsername})`;
-    
-                        const messageId = sentMessage[0].message_id;
-                        await bot.editMessageCaption(hyperlinkText, {
-                            chat_id: channelId,
-                            message_id: messageId,
-                            parse_mode: 'Markdown'
-                        });
-    
-                        selectedChannels = [];
+                        else {
+                            console.log('channelId', channelId)
+                            const channelTitle = channels[channelId];
+                            const channelUsername = await getChannelUsernameById(channelId);
+
+                            if (!channelUsername) {
+                                console.error(`Канал с ID ${channelId} не имеет username.`);
+                                continue;
+                            }
+
+                            const copyMediaGroup = mediaGroup.map((item) => {
+                                return { ...item };
+                            });
+
+                            const originalMessageText = copyMediaGroup[0].caption;    
+                            const hyperlinkText = `${originalMessageText}\n\nПодписывайтесь на канал - [${channelTitle}](https://t.me/${channelUsername})`;
+                            const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
+                            const messageId = sentMessage[0].message_id;
+
+                            await bot.editMessageCaption(hyperlinkText, {
+                                chat_id: channelId,
+                                message_id: messageId,
+                                parse_mode: 'Markdown'
+                            });
+
+                            selectedChannels = [];
+                        }
                     } catch (error) {
                         console.error(`Ошибка отправки в канал ${channelId}:`, error);
                     }
                 }
+
                 await bot.sendMessage(chatId, 'Медиа-группа успешно отправлена.');
                 mediaGroup = [];
                 isGroupProcessing = false;
@@ -1438,9 +1498,6 @@ bot.on('callback_query', async (callbackQuery) => {
             bot.removeListener('message', handleMediaMessage);
         };
         
-
-        
-
         const handleMediaMessage = async (msg) => {
             if (isSending) return;
         
@@ -1453,15 +1510,21 @@ bot.on('callback_query', async (callbackQuery) => {
                     mediaGroup.push({
                         type: 'photo',
                         media: msg.photo[msg.photo.length - 1].file_id,
-                        caption: mediaGroup.length === 0 ? msg.text || msg.caption || '' : undefined
+                        caption: mediaGroup.length === 0 ? msg.text || msg.caption || '' : undefined,
+                        fromChatId: msg.forward_from_chat ? msg.forward_from_chat.id : null,
+                        messageId: msg.forward_from_message_id || null,
+                        fromChatTitle: msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
                     });
                 }
-        
+                
                 if (msg.video) {
                     mediaGroup.push({
                         type: 'video',
                         media: msg.video.file_id,
-                        caption: mediaGroup.length === 0 ? textToSend : undefined
+                        caption: mediaGroup.length === 0 ? textToSend : undefined,
+                        fromChatId: msg.forward_from_chat ? msg.forward_from_chat.id : null,
+                        messageId: msg.forward_from_message_id || null,
+                        fromChatTitle: msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник' // Добавляем title
                     });
                 }
         
@@ -1477,11 +1540,11 @@ bot.on('callback_query', async (callbackQuery) => {
                     // Если есть фото или видео, отправляем медиафайлы с текстом
                     for (const channelId of channelsToSend) {
                         const channelTitle = channels[channelId];
-                        const channelUsername = await getChannelUsernameById(channelId);
+                        let channelUsername = await getChannelUsernameById(channelId);
         
                         if (!channelUsername) {
                             console.error(`Канал с ID ${channelId} не имеет username.`);
-                            return;
+                            channelUsername = 'Переслано'
                         }
         
                         if (msg.photo) {
@@ -1518,11 +1581,11 @@ bot.on('callback_query', async (callbackQuery) => {
                     // Если только текст, отправляем текстовое сообщение с гиперссылкой
                     for (const channelId of channelsToSend) {
                         const channelTitle = channels[channelId];
-                        const channelUsername = await getChannelUsernameById(channelId);
+                        let channelUsername = await getChannelUsernameById(channelId);
         
                         if (!channelUsername) {
                             console.error(`Канал с ID ${channelId} не имеет username.`);
-                            continue;
+                            channelUsername = '123'
                         }
         
                         const textMessage = `${textToSend}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;

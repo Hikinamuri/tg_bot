@@ -1,0 +1,8 @@
+services:
+  frontend:
+    build:
+    # build - использовать локальный докер файл
+      context: .
+    container_name: tg_bot
+    ports:
+      - "80:80"

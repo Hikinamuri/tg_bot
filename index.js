@@ -158,7 +158,6 @@ bot.on('message', async (msg) => {
         const channelTitle = msg.forward_from_chat.title || "Неизвестный канал";
         const userId = msg.from.id;  // ID пользователя, который отправил сообщение
 
-        channels[channelId] = channelTitle;
         isAwaitingChannel = false;
 
         // Подключаемся к базе данных и добавляем запись
@@ -168,9 +167,11 @@ bot.on('message', async (msg) => {
             let canSendMessages = false;
             try {
                 const member = await bot.getChatMember(channelId, botId);
-                canSendMessages = member.status === 'administrator' && member.can_post_messages;
+                canSendMessages = member.can_post_messages;
+                console.log('canSendMessages')
             } catch (error) {
-                if (error.response && error.response.statusCode === 403) {
+                console.log('canSendMessages + error')
+                if (error.response) {
                     // Если бот не состоит в канале, отправляем сообщение пользователю
                     await bot.sendMessage(msg.chat.id, `Бот не является участником канала "${channelTitle}", поэтому его нельзя добавить в базу данных.`);
                     return;
@@ -185,6 +186,7 @@ bot.on('message', async (msg) => {
             }
 
             // Вставляем данные в таблицу user_channels
+            channels[channelId] = channelTitle;
             await client.query(
                 `INSERT INTO user_chanels (user_id, channel_id, channel_name) 
                  VALUES ($1, $2, $3) 
@@ -195,7 +197,7 @@ bot.on('message', async (msg) => {
             await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен в базу данных.`);
         } catch (error) {
             console.error('Ошибка при добавлении канала в базу данных:', error);
-            await bot.sendMessage(msg.chat.id, `Произошла ошибка при добавлении канала "${channelTitle}" в базу данных.`);
+            await bot.sendMessage(msg.chat.id, `Бот не имеет прав на отправку сообщений в канал "${channelTitle}"`);
         } finally {
             client.release();  // Освобождаем соединение с базой данных
         }
@@ -209,7 +211,6 @@ const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
         return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
     });
 
-<<<<<<< HEAD
     // Определяем общее количество страниц
     const totalChannels = sortedChannels.length;
     const totalPages = Math.ceil(totalChannels / itemsPerPage);
@@ -218,12 +219,6 @@ const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     const startIndex = (page - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
     const currentPageChannels = sortedChannels.slice(startIndex, endIndex);
-=======
-    channelButtons.push([{ text: 'Добавить канал', callback_data: 'add_channel' }]);
-    channelButtons.push([{ text: 'Удалить каналы', callback_data: 'delete_channel' }]);
-    channelButtons.push([{ text: 'Выбрать все каналы', callback_data: 'select_all' }]);
-    channelButtons.push([{ text: 'Отправить сообщение ✅', callback_data: 'send_message' }]);
->>>>>>> 9d7859ad6363177df8c0794695e2b9712da28b38
 
     // Генерируем кнопки для текущей страницы
     const channelButtons = currentPageChannels.map(([id, title]) => ({
@@ -264,9 +259,6 @@ const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
         ...actionButtons // Добавляем кнопки действия
     ];
 };
-
-
-
 
 const generateDeleteButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     // Сортируем каналы в алфавитном порядке по названиям
@@ -1819,7 +1811,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         if (fromChatId) {
                             let channelUsername = await getChannelUsernameById(channelId);
                             let fromChannelUsername = await getChannelUsernameById(fromChatId);
-                            const fromChatLink = `https://t.me/${fromChannelUsername}/${messageId}`;
+                            const fromChatLink = `${fromChannelUsername}/${messageId}`;
                             const messageText = `📢 Переслано из <a href="https://t.me/${fromChatLink}">${fromChatTitle}</a>:\n\n${textToSend}`;
                             try {
                                 await bot.forwardMessage(channelId, fromChatId, messageId);
@@ -1834,9 +1826,7 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             }
                         } else {
-                            const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${textToSend}`;
-
-                            const textMessage = `${messageText}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;
+                            const textMessage = `${textToSend}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;
                             try {
                                 await bot.sendMessage(channelId, textMessage, { parse_mode: 'HTML' });
                                 await bot.sendMessage(chatId, `Текстовое сообщение успешно отправлено в канал ${channelTitle}.`);
@@ -2158,9 +2148,7 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             }
                         } else {
-                            const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${textToSend}`;
-
-                            const textMessage = `${messageText}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;
+                            const textMessage = `${textToSend}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;
                             try {
                                 await bot.sendMessage(channelId, textMessage, { parse_mode: 'HTML' });
                                 await bot.sendMessage(chatId, `Текстовое сообщение успешно отправлено в канал ${channelTitle}.`);

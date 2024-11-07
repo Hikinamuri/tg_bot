@@ -50,7 +50,7 @@ bot.on('text', async (msg) => {
                         // Пользователь найден и имеет роль с полными правами (role === true)
 
                         // Запрос к таблице user_channels
-                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels WHERE user_id = $1', [userId]);
+                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
                         channels = {};
 
                         for (const row of channelResult.rows) {
@@ -58,7 +58,7 @@ bot.on('text', async (msg) => {
                         }
 
                         // Запрос к таблице user_groups
-                        const groupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
+                        const groupResult = await client.query('SELECT id, group_name FROM user_group');
                         groups = {};
 
                         for (const row of groupResult.rows) {
@@ -104,7 +104,7 @@ bot.on('text', async (msg) => {
                         // Пользователь найден и имеет роль с полными правами (role === true)
 
                         // Запрос к таблице user_channels
-                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels WHERE user_id = $1', [userId]);
+                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
                         channels = {};
 
                         for (const row of channelResult.rows) {
@@ -112,7 +112,7 @@ bot.on('text', async (msg) => {
                         }
 
                         // Запрос к таблице user_groups
-                        const groupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
+                        const groupResult = await client.query('SELECT id, group_name FROM user_group');
                         groups = {};
 
                         for (const row of groupResult.rows) {

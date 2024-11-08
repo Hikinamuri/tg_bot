@@ -239,24 +239,12 @@ const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     const navigationRow = navigationButtons.length > 0 ? [navigationButtons] : [];
 
     // Добавляем кнопки действий в виде отдельных строк
-    const actionButtons = [
-        [
-            { text: '➕ Добавить канал', callback_data: 'add_channel' },
-            { text: '🗑️ Удалить каналы', callback_data: 'delete_channel' }
-        ],
-        [
-            { text: '✅ Выбрать все каналы', callback_data: 'select_all' },
-            { text: '📤 Отправить сообщение', callback_data: 'send_message' }
-        ]
-    ];
+
 
 
     // Собираем все кнопки в один массив, включаем навигацию и действия
     return [
-        ...channelButtons.map(button => [button]), // Оборачиваем каждую кнопку в массив для строки
-        ...navigationRow, // Добавляем навигацию, если есть
-        [],
-        ...actionButtons // Добавляем кнопки действия
+ 
     ];
 };
 
@@ -1325,7 +1313,14 @@ bot.onText(/\/channels/, async (msg) => {
         return;
     }
 
-    await bot.sendMessage(chatId, 'Выберите каналы для отправки:', {
+    await bot.sendMessage(chatId, `
+        Аналитка для канала Тест Рассылок 2: \n
+        Подписчиков: 3\n
+        Реакций на последней публикации: 0\n
+        Комментариев на последней публикации: 0\n
+        Рост подписчиков за 24ч: +2\n
+        yРост подписчиков за 7 дней +1\n
+                                    `, {
         reply_markup: {
             inline_keyboard: generateChannelButtons()
         }
@@ -2220,6 +2215,9 @@ const commands = [
     { command: "start", description: "Запуск бота" },
     { command: "channels", description: "Список каналов" },
     { command: "groups", description: "Список групп" },
+    { command: "analitics", description: "Аналитика" },
+
+
 ];
 
 bot.setMyCommands(commands);

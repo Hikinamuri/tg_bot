@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js"
+    "start": "node index.js",
+    "unless-stopped": "pm2 start index.js --name my-app --watch --restart-delay 1000"
   },
   "keywords": [],
   "author": "",

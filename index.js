@@ -8,11 +8,12 @@ let groups = {};
 let selectedChannels1 = [];
 let selectedChannelsForRemoval = [];
 let toggleChannels = [];
-const ITEMS_PER_PAGE = 2; 
+const ITEMS_PER_PAGE = 200; 
 let pendingMedia = [];
 let isAwaitingChannel = false;
 let isSending = false;
 let selectedForDeletion = [];
+let isAdmin = false
 
 let userId;
 
@@ -39,10 +40,10 @@ bot.on('text', async (msg) => {
         if (msg.text.startsWith('/start')) {
             userId = msg.from.id;  // ID пользователя в Telegram
             const client = await pool.connect();
-
+            console.log(123)
             try {
                 const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
-
+                console.log(124)
                 if (result.rows.length > 0) {
                     const userRole = result.rows[0].role;
                     
@@ -50,15 +51,19 @@ bot.on('text', async (msg) => {
                         // Пользователь найден и имеет роль с полными правами (role === true)
 
                         // Запрос к таблице user_channels
-                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels WHERE user_id = $1', [userId]);
+                        console.log('userId', userId)
+                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
+                        console.log(channelResult, 'channelResult')
                         channels = {};
 
                         for (const row of channelResult.rows) {
                             channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
                         }
-
+                        console.log('channels', channels)
                         // Запрос к таблице user_groups
-                        const groupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
+                        const groupResult = await client.query('SELECT id, group_name FROM user_group');
+                        console.log(groupResult, 'groupResult')
+
                         groups = {};
 
                         for (const row of groupResult.rows) {
@@ -73,11 +78,11 @@ bot.on('text', async (msg) => {
                         }
 
                         await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас есть полный доступ.`);
-                        
+                        isAdmin = true
                         // Логируем объекты для проверки
 
                     } else {
-                        await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас нет полного доступа.`);
+                        await bot.sendMessage(msg.chat.id, `У вас нет полного доступа для этого бота.`);
                     }
                 } else {
                     // Если пользователь не найден, добавляем его
@@ -87,58 +92,7 @@ bot.on('text', async (msg) => {
                     await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
                 }
             } finally {
-                client.release();  // Освобождаем соединение с базой данных
-            }
-            return;
-        } else if (msg.text.startsWith('/channels' || msg.text.startsWith('/groups'))) {
-            userId = msg.from.id;  // ID пользователя в Telegram
-            const client = await pool.connect();
-
-            try {
-                const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
-
-                if (result.rows.length > 0) {
-                    const userRole = result.rows[0].role;
-                    
-                    if (userRole === true) {
-                        // Пользователь найден и имеет роль с полными правами (role === true)
-
-                        // Запрос к таблице user_channels
-                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels WHERE user_id = $1', [userId]);
-                        channels = {};
-
-                        for (const row of channelResult.rows) {
-                            channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
-                        }
-
-                        // Запрос к таблице user_groups
-                        const groupResult = await client.query('SELECT id, group_name FROM user_group WHERE user_id = $1', [userId]);
-                        groups = {};
-
-                        for (const row of groupResult.rows) {
-                            if (!groups[row.group_name]) {
-                                groups[row.group_name] = [];
-                            }
-                            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
-
-                            for (const row1 of groupChannels.rows) {
-                                groups[row.group_name].push(row1.channel_id);  // Сохраняем имя группы и id в объект
-                            }
-                        }
-                        
-                        // Логируем объекты для проверки
-
-                    } else {
-                        await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас нет полного доступа.`);
-                    }
-                } else {
-                    // Если пользователь не найден, добавляем его
-                    const defaultRole = false;  // Роль по умолчанию
-                    await client.query(`INSERT INTO users (user_id, role) VALUES ($1, $2)`, [userId, defaultRole]);
-
-                    await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
-                }
-            } finally {
+                console.log(125)
                 client.release();  // Освобождаем соединение с базой данных
             }
             return;
@@ -299,8 +253,6 @@ const generateDeleteButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
 
     return { inline_keyboard: channelButtons, pageInfoText }; // Возвращаем и кнопки, и текст с информацией о странице
 };
-
-
 
 
 const generateGroupChannelButtons = (currentPage = 1) => {
@@ -1315,21 +1267,69 @@ bot.on('callback_query', async (query) => {
 
 bot.onText(/\/channels/, async (msg) => {
     const chatId = msg.chat.id;
+    const userId = msg.from.id;
 
-    if (Object.keys(channels).length === 0) {
-        await bot.sendMessage(chatId, 'Пока нет доступных каналов.', {
+    const client = await pool.connect();
+
+    try {
+        // Проверяем, админ ли пользователь
+        const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
+        if (result.rows.length === 0) {
+            // Если пользователь не найден, добавляем его с ролью по умолчанию
+            const defaultRole = false; // Роль по умолчанию
+            await client.query('INSERT INTO users (user_id, role) VALUES ($1, $2)', [userId, defaultRole]);
+            await bot.sendMessage(chatId, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
+            return;
+        }
+
+        const userRole = result.rows[0].role;
+
+        if (!userRole) {
+            await bot.sendMessage(chatId, `У вас нет полного доступа для этого бота.`);
+            return;
+        }
+
+        // Пользователь найден и имеет полный доступ, загружаем каналы и группы из базы данных
+        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
+        channels = {};
+        for (const row of channelResult.rows) {
+            channels[row.channel_id] = row.channel_name;
+        }
+
+        const groupResult = await client.query('SELECT id, group_name FROM user_group');
+        groups = {};
+        for (const row of groupResult.rows) {
+            if (!groups[row.group_name]) {
+                groups[row.group_name] = [];
+            }
+            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
+            for (const row1 of groupChannels.rows) {
+                groups[row.group_name].push(row1.channel_id);
+            }
+        }
+
+        // Проверка на наличие каналов и отправка сообщения с кнопками
+        if (Object.keys(channels).length === 0) {
+            await bot.sendMessage(chatId, 'Пока нет доступных каналов.', {
+                reply_markup: {
+                    inline_keyboard: [[{ text: 'Добавить канал', callback_data: 'add_channel' }]],
+                }
+            });
+            return;
+        }
+
+        await bot.sendMessage(chatId, `Выберите каналы для отправки: Всего каналов - ${Object.keys(channels).length}`, {
             reply_markup: {
-                inline_keyboard: [[{ text: 'Добавить канал', callback_data: 'add_channel' }]],
+                inline_keyboard: generateChannelButtons()
             }
         });
-        return;
-    }
 
-    await bot.sendMessage(chatId, 'Выберите каналы для отправки:', {
-        reply_markup: {
-            inline_keyboard: generateChannelButtons()
-        }
-    });
+    } catch (error) {
+        console.error('Ошибка при получении каналов и групп:', error);
+        await bot.sendMessage(chatId, 'Произошла ошибка при попытке получить доступные каналы.');
+    } finally {
+        client.release(); // Освобождаем соединение с базой данных
+    }
 });
 
 function formatTextWithEntities(text, entities) {
@@ -1552,7 +1552,7 @@ bot.on('callback_query', async (callbackQuery) => {
         }
 
         // Запрашиваем сообщение с текстом и медиа
-        await bot.sendMessage(chatId, 'Введите текст для рассылки и прикрепите медиа (фото или видео).');
+        await bot.sendMessage(chatId, `Введите текст для рассылки и прикрепите медиа (фото или видео). Выбрано для отправки ${selectedChannels.length}`);
 
         let mediaGroup = [];
         let isGroupProcessing = false;
@@ -2206,14 +2206,63 @@ bot.on('callback_query', async (callbackQuery) => {
 
 bot.onText(/\/groups/, async (msg) => {
     const chatId = msg.chat.id;
-    const sentMessage = await bot.sendMessage(chatId, 'Что вы хотите сделать:', {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: 'Создать новую группу', callback_data: 'create_group' }],
-                [{ text: 'Посмотреть существующие группы', callback_data: 'view_groups' }]
-            ]
+    const userId = msg.from.id;
+
+    const client = await pool.connect();
+
+    try {
+        // Проверяем, админ ли пользователь
+        const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
+        if (result.rows.length === 0) {
+            // Если пользователь не найден, добавляем его с ролью по умолчанию
+            const defaultRole = false; // Роль по умолчанию
+            await client.query('INSERT INTO users (user_id, role) VALUES ($1, $2)', [userId, defaultRole]);
+            await bot.sendMessage(chatId, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
+            return;
         }
-    });
+
+        const userRole = result.rows[0].role;
+
+        if (!userRole) {
+            await bot.sendMessage(chatId, `У вас нет полного доступа для этого бота.`);
+            return;
+        }
+
+        // Пользователь найден и имеет полный доступ, загружаем каналы и группы из базы данных
+        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
+        channels = {};
+        for (const row of channelResult.rows) {
+            channels[row.channel_id] = row.channel_name;
+        }
+
+        const groupResult = await client.query('SELECT id, group_name FROM user_group');
+        groups = {};
+        for (const row of groupResult.rows) {
+            if (!groups[row.group_name]) {
+                groups[row.group_name] = [];
+            }
+            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
+            for (const row1 of groupChannels.rows) {
+                groups[row.group_name].push(row1.channel_id);
+            }
+        }
+
+        // Проверка на наличие каналов и отправка сообщения с кнопками
+        const sentMessage = await bot.sendMessage(chatId, 'Что вы хотите сделать:', {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: 'Создать новую группу', callback_data: 'create_group' }],
+                    [{ text: 'Посмотреть существующие группы', callback_data: 'view_groups' }]
+                ]
+            }
+        });
+
+    } catch (error) {
+        console.error('Ошибка при получении каналов и групп:', error);
+        await bot.sendMessage(chatId, 'Произошла ошибка при попытке получить доступные каналы.');
+    } finally {
+        client.release(); // Освобождаем соединение с базой данных
+    }
 });
 
 const commands = [

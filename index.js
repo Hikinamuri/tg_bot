@@ -8,11 +8,12 @@ let groups = {};
 let selectedChannels1 = [];
 let selectedChannelsForRemoval = [];
 let toggleChannels = [];
-const ITEMS_PER_PAGE = 2; 
+const ITEMS_PER_PAGE = 10; 
 let pendingMedia = [];
 let isAwaitingChannel = false;
 let isSending = false;
 let selectedForDeletion = [];
+let processingMessage = false;
 
 let userId;
 
@@ -2117,21 +2118,28 @@ bot.on('callback_query', async (callbackQuery) => {
                             }
                         }
                     }
-                } else {
+                }   // Flag to check if a message is being processed
+
+                else {
+                    if (processingMessage) {
+                        return; // Skip if a message is already being processed
+                    }
+                
+                    processingMessage = true;  // Set flag to indicate processing
+                
                     // Если только текст, отправляем текстовое сообщение с гиперссылкой
                     for (const channelId of channelsToSend) {
                         const fromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
-                        const messageId = msg.forward_from_message_id || null
-                        const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
+                        const messageId = msg.forward_from_message_id || null;
+                        const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник';
                         const channelTitle = channels[channelId];
                         let channelUsername = await getChannelUsernameById(channelId);
-        
+                
                         if (!channelUsername) {
                             console.error(`Канал с ID ${channelId} не имеет username.`);
                         }
-        
+                
                         if (fromChatId) {
-                            let channelUsername = await getChannelUsernameById(channelId);
                             let fromChannelUsername = await getChannelUsernameById(fromChatId);
                             const fromChatLink = `https://t.me/${fromChannelUsername}/${messageId}`;
                             const messageText = `📢 Переслано из <a href="${fromChatLink}">${fromChatTitle}</a>:\n\n${textToSend}`;
@@ -2141,7 +2149,6 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             } catch (error) {
                                 console.error(`Ошибка пересылки сообщения из ${fromChatId}:`, error.statusCode);
-                                // Отправка медиафайла с текстом вручную
                                 const textMessage = `${messageText}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;
                                 await bot.sendMessage(channelId, textMessage, { parse_mode: 'HTML' });
                                 await bot.sendMessage(chatId, `Сообщение с фото успешно отправлено в канал ${channelTitle}.`);
@@ -2158,7 +2165,11 @@ bot.on('callback_query', async (callbackQuery) => {
                             selectedChannels = [];
                         }
                     }
+                
+                    processingMessage = false;  // Reset flag after processing
                 }
+                
+                
                 bot.removeListener('message', handleMediaMessage);
             }
         };

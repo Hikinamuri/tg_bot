@@ -13,6 +13,7 @@ let pendingMedia = [];
 let isAwaitingChannel = false;
 let isSending = false;
 let selectedForDeletion = [];
+let processingMessage = false;
 let isAdmin = false
 
 let userId;
@@ -51,9 +52,7 @@ bot.on('text', async (msg) => {
                         // Пользователь найден и имеет роль с полными правами (role === true)
 
                         // Запрос к таблице user_channels
-                        console.log('userId', userId)
                         const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
-                        console.log(channelResult, 'channelResult')
                         channels = {};
 
                         for (const row of channelResult.rows) {
@@ -62,8 +61,6 @@ bot.on('text', async (msg) => {
                         console.log('channels', channels)
                         // Запрос к таблице user_groups
                         const groupResult = await client.query('SELECT id, group_name FROM user_group');
-                        console.log(groupResult, 'groupResult')
-
                         groups = {};
 
                         for (const row of groupResult.rows) {
@@ -92,7 +89,58 @@ bot.on('text', async (msg) => {
                     await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
                 }
             } finally {
-                console.log(125)
+                client.release();  // Освобождаем соединение с базой данных
+            }
+            return;
+        } else if (msg.text.startsWith('/channels' || msg.text.startsWith('/groups'))) {
+            userId = msg.from.id;  // ID пользователя в Telegram
+            const client = await pool.connect();
+
+            try {
+                const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
+
+                if (result.rows.length > 0) {
+                    const userRole = result.rows[0].role;
+                    
+                    if (userRole === true) {
+                        // Пользователь найден и имеет роль с полными правами (role === true)
+
+                        // Запрос к таблице user_channels
+                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
+                        channels = {};
+
+                        for (const row of channelResult.rows) {
+                            channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
+                        }
+
+                        // Запрос к таблице user_groups
+                        const groupResult = await client.query('SELECT id, group_name FROM user_group');
+                        groups = {};
+
+                        for (const row of groupResult.rows) {
+                            if (!groups[row.group_name]) {
+                                groups[row.group_name] = [];
+                            }
+                            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
+
+                            for (const row1 of groupChannels.rows) {
+                                groups[row.group_name].push(row1.channel_id);  // Сохраняем имя группы и id в объект
+                            }
+                        }
+                        
+                        // Логируем объекты для проверки
+
+                    } else {
+                        await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас нет полного доступа.`);
+                    }
+                } else {
+                    // Если пользователь не найден, добавляем его
+                    const defaultRole = false;  // Роль по умолчанию
+                    await client.query(`INSERT INTO users (user_id, role) VALUES ($1, $2)`, [userId, defaultRole]);
+
+                    await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас пока нет доступа, обратитесь к администратору.`);
+                }
+            } finally {
                 client.release();  // Освобождаем соединение с базой данных
             }
             return;
@@ -2117,21 +2165,28 @@ bot.on('callback_query', async (callbackQuery) => {
                             }
                         }
                     }
-                } else {
+                }   // Flag to check if a message is being processed
+
+                else {
+                    if (processingMessage) {
+                        return; // Skip if a message is already being processed
+                    }
+                
+                    processingMessage = true;  // Set flag to indicate processing
+                
                     // Если только текст, отправляем текстовое сообщение с гиперссылкой
                     for (const channelId of channelsToSend) {
                         const fromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
-                        const messageId = msg.forward_from_message_id || null
-                        const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
+                        const messageId = msg.forward_from_message_id || null;
+                        const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник';
                         const channelTitle = channels[channelId];
                         let channelUsername = await getChannelUsernameById(channelId);
-        
+                
                         if (!channelUsername) {
                             console.error(`Канал с ID ${channelId} не имеет username.`);
                         }
-        
+                
                         if (fromChatId) {
-                            let channelUsername = await getChannelUsernameById(channelId);
                             let fromChannelUsername = await getChannelUsernameById(fromChatId);
                             const fromChatLink = `https://t.me/${fromChannelUsername}/${messageId}`;
                             const messageText = `📢 Переслано из <a href="${fromChatLink}">${fromChatTitle}</a>:\n\n${textToSend}`;
@@ -2141,7 +2196,6 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             } catch (error) {
                                 console.error(`Ошибка пересылки сообщения из ${fromChatId}:`, error.statusCode);
-                                // Отправка медиафайла с текстом вручную
                                 const textMessage = `${messageText}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;
                                 await bot.sendMessage(channelId, textMessage, { parse_mode: 'HTML' });
                                 await bot.sendMessage(chatId, `Сообщение с фото успешно отправлено в канал ${channelTitle}.`);
@@ -2158,7 +2212,11 @@ bot.on('callback_query', async (callbackQuery) => {
                             selectedChannels = [];
                         }
                     }
+                
+                    processingMessage = false;  // Reset flag after processing
                 }
+                
+                
                 bot.removeListener('message', handleMediaMessage);
             }
         };

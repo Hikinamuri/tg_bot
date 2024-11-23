@@ -1401,10 +1401,6 @@ bot.onText(/\/channels/, async (msg) => {
     }
 });
 
-
-
-
-
 function formatTextWithEntities(text, entities) {
     let formattedText = text;
     entities.reverse().forEach(entity => {

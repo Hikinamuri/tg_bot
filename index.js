@@ -1419,24 +1419,27 @@ bot.onText(/\/channels/, async (msg) => {
             return;
         }
 
-    try {
-        // Ожидаем результат от функции generateChannelButtons
-        const channelButtons = await generateChannelButtons();
+        try {
+            // Ожидаем результат от функции generateChannelButtons
+            const channelButtons = await generateChannelButtons();
 
-        // Проверяем, что возвращается массив массивов
-        if (Array.isArray(channelButtons) && channelButtons.every(item => Array.isArray(item))) {
-            // Отправляем сообщение с кнопками
-            await bot.sendMessage(chatId, 'Выберите каналы для отправки:', {
-                reply_markup: {
-                    inline_keyboard: channelButtons // Должен быть массив массивов
-                }
-            });
-        } else {
-            throw new Error("Кнопки не в правильном формате");
+            // Проверяем, что возвращается массив массивов
+            if (Array.isArray(channelButtons) && channelButtons.every(item => Array.isArray(item))) {
+                // Отправляем сообщение с кнопками
+                await bot.sendMessage(chatId, 'Выберите каналы для отправки:', {
+                    reply_markup: {
+                        inline_keyboard: channelButtons // Должен быть массив массивов
+                    }
+                });
+            } else {
+                throw new Error("Кнопки не в правильном формате");
+            }
+        } catch (error) {
+            console.error("Ошибка при генерации кнопок:", error);
+            await bot.sendMessage(chatId, "Произошла ошибка при загрузке каналов. Попробуйте позже.");
         }
     } catch (error) {
-        console.error("Ошибка при генерации кнопок:", error);
-        await bot.sendMessage(chatId, "Произошла ошибка при загрузке каналов. Попробуйте позже.");
+        console.log("Error")
     }
 });
 

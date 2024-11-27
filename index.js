@@ -8,7 +8,7 @@ let groups = {};
 let selectedChannels1 = [];
 let selectedChannelsForRemoval = [];
 let toggleChannels = [];
-const ITEMS_PER_PAGE = 200; 
+const ITEMS_PER_PAGE = 1000; 
 let pendingMedia = [];
 let isAwaitingChannel = false;
 let isSending = false;
@@ -207,7 +207,7 @@ bot.on('message', async (msg) => {
 });
 
 
-const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
+const generateChannelButtons = async (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     // Сортируем каналы в алфавитном порядке по названиям
     const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
         return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
@@ -223,10 +223,33 @@ const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     const currentPageChannels = sortedChannels.slice(startIndex, endIndex);
 
     // Генерируем кнопки для текущей страницы
-    const channelButtons = currentPageChannels.map(([id, title]) => ({
-        text: `${selectedChannels.includes(id) ? '✅' : '⬜️'} ${title}`, // Добавляем отметку выбора
-        callback_data: `${id}_${page}` // Передаем id канала и текущую страницу
+    const channelButtons = await Promise.all(currentPageChannels.map(async ([id, title]) => {
+        const username = await fetchChannelUsernameById(id); // Получаем username для канала
+        const channelLink = username ? `https://t.me/${username}` : ''; // Если нет username, оставляем пустую строку
+
+        // Формируем кнопки для одного канала
+        const buttons = [];
+
+        // Кнопка выбора канала
+        buttons.push({
+            text: `${selectedChannels.includes(id) ? '✅' : '⬜️'} ${title}`, // Кнопка выбора канала
+            callback_data: `${id}_${page}` // Данные для callback
+        });
+
+        // Если канал имеет username, добавляем кнопку с переходом
+        if (channelLink) {
+            buttons.push({
+                text: '🔗 Перейти',
+                url: channelLink // Кнопка с URL для перехода
+            });
+        }
+
+        // Возвращаем массив кнопок, каждая кнопка - объект
+        return buttons;
     }));
+
+    // Фильтруем пустые кнопки (если они есть)
+    const filteredChannelButtons = channelButtons.filter(button => button.length > 0);
 
     // Добавляем навигационные кнопки
     const navigationButtons = [];
@@ -242,25 +265,55 @@ const generateChannelButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
 
     // Добавляем кнопки действий в виде отдельных строк
     const actionButtons = [
-        [
-            { text: '➕ Добавить канал', callback_data: 'add_channel' },
-            { text: '🗑️ Удалить каналы', callback_data: 'delete_channel' }
-        ],
-        [
-            { text: '✅ Выбрать все каналы', callback_data: 'select_all' },
-            { text: '📤 Отправить сообщение', callback_data: 'send_message' }
-        ]
+        [{ text: '➕ Добавить канал', callback_data: 'add_channel' }, { text: '🗑️ Удалить каналы', callback_data: 'delete_channel' }],
+        [{ text: '✅ Выбрать все каналы', callback_data: 'select_all' }, { text: '📤 Отправить сообщение', callback_data: 'send_message' }]
     ];
 
-
-    // Собираем все кнопки в один массив, включаем навигацию и действия
+    // Собираем все кнопки в один массив, включая навигацию и действия
     return [
-        ...channelButtons.map(button => [button]), // Оборачиваем каждую кнопку в массив для строки
+        ...filteredChannelButtons, // Каждую группу кнопок оборачиваем в массив
         ...navigationRow, // Добавляем навигацию, если есть
-        [],
         ...actionButtons // Добавляем кнопки действия
     ];
 };
+
+
+
+
+
+
+
+
+async function fetchChannelUsernameById(channelId) {
+    try {
+        const chat = await bot.getChat(channelId);
+
+        // Если у чата есть username, возвращаем его
+        if (chat.username) {
+            return chat.username;
+        }
+
+        // Если у чата нет username, но есть invite_link, извлекаем username из ссылки
+        if (chat.invite_link) {
+            const chatUrl = chat.invite_link;
+            const extractedUsername = chatUrl.split('/')[3];  // Извлекаем часть после '/t.me/'
+            console.log(`Извлечен username из invite_link для канала ${channelId}: @${extractedUsername}`);
+            return extractedUsername;
+        }
+
+        // Если нет ни username, ни invite_link, возвращаем null
+        console.log(`Не найден username для канала ${channelId}`);
+        return null;
+    } catch (error) {
+        return null;
+    }
+}
+
+
+
+
+
+
 
 const generateDeleteButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     // Сортируем каналы в алфавитном порядке по названиям
@@ -1366,19 +1419,30 @@ bot.onText(/\/channels/, async (msg) => {
             return;
         }
 
-        await bot.sendMessage(chatId, `Выберите каналы для отправки: Всего каналов - ${Object.keys(channels).length}`, {
-            reply_markup: {
-                inline_keyboard: generateChannelButtons()
-            }
-        });
+    try {
+        // Ожидаем результат от функции generateChannelButtons
+        const channelButtons = await generateChannelButtons();
 
+        // Проверяем, что возвращается массив массивов
+        if (Array.isArray(channelButtons) && channelButtons.every(item => Array.isArray(item))) {
+            // Отправляем сообщение с кнопками
+            await bot.sendMessage(chatId, 'Выберите каналы для отправки:', {
+                reply_markup: {
+                    inline_keyboard: channelButtons // Должен быть массив массивов
+                }
+            });
+        } else {
+            throw new Error("Кнопки не в правильном формате");
+        }
     } catch (error) {
-        console.error('Ошибка при получении каналов и групп:', error);
-        await bot.sendMessage(chatId, 'Произошла ошибка при попытке получить доступные каналы.');
-    } finally {
-        client.release(); // Освобождаем соединение с базой данных
+        console.error("Ошибка при генерации кнопок:", error);
+        await bot.sendMessage(chatId, "Произошла ошибка при загрузке каналов. Попробуйте позже.");
     }
 });
+
+
+
+
 
 function formatTextWithEntities(text, entities) {
     let formattedText = text;
@@ -1844,30 +1908,38 @@ bot.on('callback_query', async (callbackQuery) => {
                             }
                         }
                     }
-                } else {
+                } 
+                
+              else {
+                    
+                    if (processingMessage) {
+                        return; // Skip if a message is already being processed
+                    }
+                
+                    processingMessage = true;  // Set flag to indicate processing
+                
+                    // Если только текст, отправляем текстовое сообщение с гиперссылкой
                     for (const channelId of channelsToSend) {
                         const fromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
-                        const messageId = msg.forward_from_message_id || null
-                        const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
+                        const messageId = msg.forward_from_message_id || null;
+                        const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник';
                         const channelTitle = channels[channelId];
                         let channelUsername = await getChannelUsernameById(channelId);
-        
+                
                         if (!channelUsername) {
                             console.error(`Канал с ID ${channelId} не имеет username.`);
                         }
-        
+                
                         if (fromChatId) {
-                            let channelUsername = await getChannelUsernameById(channelId);
                             let fromChannelUsername = await getChannelUsernameById(fromChatId);
-                            const fromChatLink = `${fromChannelUsername}/${messageId}`;
-                            const messageText = `📢 Переслано из <a href="https://t.me/${fromChatLink}">${fromChatTitle}</a>:\n\n${textToSend}`;
+                            const fromChatLink = `https://t.me/${fromChannelUsername}/${messageId}`;
+                            const messageText = `📢 Переслано из <a href="${fromChatLink}">${fromChatTitle}</a>:\n\n${textToSend}`;
                             try {
                                 await bot.forwardMessage(channelId, fromChatId, messageId);
                                 await bot.sendMessage(chatId, `Сообщение с фото успешно отправлено в канал ${channelTitle}.`);
                                 selectedChannels = [];
                             } catch (error) {
                                 console.error(`Ошибка пересылки сообщения из ${fromChatId}:`, error.statusCode);
-                                // Отправка медиафайла с текстом вручную
                                 const textMessage = `${messageText}\n\nПодписывайтесь на канал - <a href="https://t.me/${channelUsername}">${channelTitle}</a>`;
                                 await bot.sendMessage(channelId, textMessage, { parse_mode: 'HTML' });
                                 await bot.sendMessage(chatId, `Сообщение с фото успешно отправлено в канал ${channelTitle}.`);
@@ -1884,6 +1956,8 @@ bot.on('callback_query', async (callbackQuery) => {
                             selectedChannels = [];
                         }
                     }
+                
+                    processingMessage = false;  // Reset flag after processing
                 }
                 bot.removeListener('message', handleMediaMessage);
             }
@@ -2166,8 +2240,8 @@ bot.on('callback_query', async (callbackQuery) => {
                         }
                     }
                 }   // Flag to check if a message is being processed
-
                 else {
+
                     if (processingMessage) {
                         return; // Skip if a message is already being processed
                     }

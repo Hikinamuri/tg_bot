@@ -44,7 +44,6 @@ bot.on('text', async (msg) => {
             console.log(123)
             try {
                 const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
-                console.log(124)
                 if (result.rows.length > 0) {
                     const userRole = result.rows[0].role;
                     
@@ -58,7 +57,6 @@ bot.on('text', async (msg) => {
                         for (const row of channelResult.rows) {
                             channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
                         }
-                        console.log('channels', channels)
                         // Запрос к таблице user_groups
                         const groupResult = await client.query('SELECT id, group_name FROM user_group');
                         groups = {};
@@ -231,6 +229,7 @@ const generateChannelButtons = async (page = 1, itemsPerPage = ITEMS_PER_PAGE) =
                         return null; // Возвращаем null в случае ошибки
                     });
 
+                    // console.log('usernameOrInviteLink', usernameOrInviteLink)
                     // Формируем ссылку на канал (username или invite_link)
                     const channelLink = usernameOrInviteLink
                         ? usernameOrInviteLink.startsWith('http') // Проверяем, это username или invite_link
@@ -311,35 +310,71 @@ const generateChannelButtons = async (page = 1, itemsPerPage = ITEMS_PER_PAGE) =
 };
 
 
+const rateLimitMap = new Map(); // Кэш для хранения username/invite_link
+const requestQueue = []; // Очередь запросов
+let isProcessingQueue = false; // Флаг обработки очереди
+
 async function fetchChannelUsernameById(id) {
-    try {
-
-        if (!id || typeof id !== 'string' || (!id.startsWith('@') && !id.startsWith('-100'))) {
-            return null;
-        }
-        
-        // Попытка получить информацию о чате
-        const chat = await bot.getChat(id);
-
-        // Проверяем наличие username
-        if (chat.username) {
-            return chat.username
-        }
-
-        if (chat.invite_link) {
-            const chatUrl = chat.invite_link
-            console.log(chatUrl.split('/')[3])
-            return chatUrl.split('/')[3];
-        }
-
-        // Если нет данных
-        console.log(`Нет username или invite_link для канала ${id}`);
-        return null;
-    } catch (error) {
-        
+    if (!id || typeof id !== 'string' || (!id.startsWith('@') && !id.startsWith('-100'))) {
         return null;
     }
+
+    // Проверяем кэш
+    if (rateLimitMap.has(id)) {
+        const cached = rateLimitMap.get(id);
+        if (Date.now() < cached.expiry) {
+            return cached.value; // Возвращаем из кэша
+        } else {
+            rateLimitMap.delete(id); // Удаляем устаревший кэш
+        }
+    }
+
+    // Добавляем запрос в очередь
+    return new Promise((resolve, reject) => {
+        requestQueue.push({ id, resolve, reject });
+        if (!isProcessingQueue) {
+            processQueue();
+        }
+    });
 }
+
+async function processQueue() {
+    if (isProcessingQueue || requestQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    while (requestQueue.length > 0) {
+        const { id, resolve, reject } = requestQueue.shift();
+
+        try {
+            const chat = await bot.getChat(id);
+
+            let result;
+            if (chat.username) {
+                result = chat.username;
+            } else if (chat.invite_link) {
+                result = chat.invite_link.split('/')[3];
+            } else {
+                console.log(`Нет username или invite_link для канала ${id}`);
+                result = null;
+            }
+
+            // Сохраняем в кэш (TTL = 5 минут)
+            rateLimitMap.set(id, { value: result, expiry: Date.now() + 5 * 60 * 1000 });
+
+            resolve(result);
+        } catch (error) {
+            const retryAfter = error.response.body.parameters.retry_after || 1; // Задержка в секундах
+
+            console.log(error.response.body.parameters.retry_after)
+            console.log(`Превышен лимит запросов. Ожидание ${retryAfter} секунд.`);
+            await new Promise(r => setTimeout(r, retryAfter * 100)); // Задержка
+            requestQueue.unshift({ id, resolve, reject }); // Возвращаем запрос в начало очереди
+        }
+    }
+
+    isProcessingQueue = false;
+}
+
 
 
 

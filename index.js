@@ -8,13 +8,11 @@ let groups = {};
 let selectedChannels1 = [];
 let selectedChannelsForRemoval = [];
 let toggleChannels = [];
-const ITEMS_PER_PAGE = 20; 
-let pendingMedia = [];
+const ITEMS_PER_PAGE = 20;
 let isAwaitingChannel = false;
 let isSending = false;
 let selectedForDeletion = [];
 let processingMessage = false;
-let isAdmin = false
 
 let userId;
 
@@ -27,6 +25,7 @@ const pool = new Pool({
     database: process.env.DB_NAME,
     password: process.env.DB_USER_PASSWORD,
     port: process.env.DB_PORT,
+    query_timeout: 10000
 });
 
 pool.connect()
@@ -41,36 +40,20 @@ bot.on('text', async (msg) => {
         if (msg.text.startsWith('/start')) {
             userId = msg.from.id;  // ID пользователя в Telegram
             const client = await pool.connect();
-            console.log(123)
+
             try {
                 const result = await client.query('SELECT role FROM users WHERE user_id = $1', [userId]);
                 if (result.rows.length > 0) {
                     const userRole = result.rows[0].role;
-                    
+
                     if (userRole === true) {
                         // Пользователь найден и имеет роль с полными правами (role === true)
 
                         // Запрос к таблице user_channels
-                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
-                        channels = {};
+                        channels = await get_channels(client);
 
-                        for (const row of channelResult.rows) {
-                            channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
-                        }
                         // Запрос к таблице user_groups
-                        const groupResult = await client.query('SELECT id, group_name FROM user_group');
-                        groups = {};
-
-                        for (const row of groupResult.rows) {
-                            if (!groups[row.group_name]) {
-                                groups[row.group_name] = [];
-                            }
-                            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
-
-                            for (const row1 of groupChannels.rows) {
-                                groups[row.group_name].push(row1.channel_id);  // Сохраняем имя группы и id в объект
-                            }
-                        }
+                        groups = await get_groups(client);
 
                         await bot.sendMessage(msg.chat.id, `Добро пожаловать! У вас есть полный доступ.`);
                         isAdmin = true
@@ -99,33 +82,16 @@ bot.on('text', async (msg) => {
 
                 if (result.rows.length > 0) {
                     const userRole = result.rows[0].role;
-                    
+
                     if (userRole === true) {
                         // Пользователь найден и имеет роль с полными правами (role === true)
 
                         // Запрос к таблице user_channels
-                        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
-                        channels = {};
-
-                        for (const row of channelResult.rows) {
-                            channels[row.channel_id] = row.channel_name;  // Сохраняем id канала и его имя в объект
-                        }
+                        channels = await get_channels(client);
 
                         // Запрос к таблице user_groups
-                        const groupResult = await client.query('SELECT id, group_name FROM user_group');
-                        groups = {};
+                        groups = await get_groups(client);
 
-                        for (const row of groupResult.rows) {
-                            if (!groups[row.group_name]) {
-                                groups[row.group_name] = [];
-                            }
-                            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
-
-                            for (const row1 of groupChannels.rows) {
-                                groups[row.group_name].push(row1.channel_id);  // Сохраняем имя группы и id в объект
-                            }
-                        }
-                        
                         // Логируем объекты для проверки
 
                     } else {
@@ -168,9 +134,7 @@ bot.on('message', async (msg) => {
             try {
                 const member = await bot.getChatMember(channelId, botId);
                 canSendMessages = member.can_post_messages;
-                console.log('canSendMessages')
             } catch (error) {
-                console.log('canSendMessages + error')
                 if (error.response) {
                     // Если бот не состоит в канале, отправляем сообщение пользователю
                     await bot.sendMessage(msg.chat.id, `Бот не является участником канала "${channelTitle}", поэтому его нельзя добавить в базу данных.`);
@@ -179,37 +143,37 @@ bot.on('message', async (msg) => {
                     throw error;  // Перебрасываем ошибку, если она не связана с правами доступа
                 }
             }
-            
+
             if (!canSendMessages) {
                 await bot.sendMessage(msg.chat.id, `Бот не имеет прав на отправку сообщений в канал "${channelTitle}", поэтому его нельзя добавить в базу данных.`);
                 return;
             }
 
             // Вставляем данные в таблицу user_channels
-            channels[channelId] = channelTitle;
+            const channel = channels[channelId];
+            // const channelTitle = channel.name;
             await client.query(
-                `INSERT INTO user_chanels (user_id, channel_id, channel_name) 
-                 VALUES ($1, $2, $3) 
-                 ON CONFLICT (user_id, channel_id) DO NOTHING`,
+                `INSERT INTO user_chanels (user_id, channel_id, channel_name)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (channel_id) DO NOTHING`,
                 [userId, channelId, channelTitle]
             );
 
             await bot.sendMessage(msg.chat.id, `Канал "${channelTitle}" успешно добавлен в базу данных.`);
         } catch (error) {
             console.error('Ошибка при добавлении канала в базу данных:', error);
-            await bot.sendMessage(msg.chat.id, `Бот не имеет прав на отправку сообщений в канал "${channelTitle}"`);
+            await bot.sendMessage(msg.chat.id, `Ошибка при добавлении канала - "${channelTitle}" в базу данных`);
         } finally {
             client.release();  // Освобождаем соединение с базой данных
         }
     }
 });
 
-
 const generateChannelButtons = async (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     try {
         // Сортировка каналов по алфавиту
-        const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) =>
-            titleA.toLowerCase().localeCompare(titleB.toLowerCase())
+        const sortedChannels = Object.entries(channels).sort(([, objA], [, objB]) =>
+            objA.name.toLowerCase().localeCompare(objB.name.toLowerCase())
         );
 
         const totalChannels = sortedChannels.length;
@@ -222,12 +186,17 @@ const generateChannelButtons = async (page = 1, itemsPerPage = ITEMS_PER_PAGE) =
 
         // Генерация кнопок для каждого канала
         const channelButtons = await Promise.all(
-            currentPageChannels.map(async ([id, title]) => {
+            currentPageChannels.map(async ([id, channel]) => {
                 try {
                     // Получаем информацию о канале
-                    const usernameOrInviteLink = await fetchChannelUsernameById(id).catch(err => {
-                        return null; // Возвращаем null в случае ошибки
-                    });
+                    let usernameOrInviteLink;
+                    if (channel.link) {
+                        usernameOrInviteLink = channel.link;
+                    } else {
+                        usernameOrInviteLink = await fetchChannelUsernameById(id).catch(err => {
+                            return null; // Возвращаем null в случае ошибки
+                        });
+                    }
 
                     // console.log('usernameOrInviteLink', usernameOrInviteLink)
                     // Формируем ссылку на канал (username или invite_link)
@@ -240,7 +209,7 @@ const generateChannelButtons = async (page = 1, itemsPerPage = ITEMS_PER_PAGE) =
                     // Генерация кнопки с учетом состояния выбора канала
                     const buttons = [
                         {
-                            text: `${selectedChannels.includes(id) ? '✅' : '⬜️'} ${title}`,
+                            text: `${selectedChannels.includes(id) ? '✅' : '⬜️'} ${channel.name}`,
                             callback_data: `${id}_${page}` // id канала и номер страницы
                         }
                     ];
@@ -309,7 +278,6 @@ const generateChannelButtons = async (page = 1, itemsPerPage = ITEMS_PER_PAGE) =
     }
 };
 
-
 const rateLimitMap = new Map(); // Кэш для хранения username/invite_link
 const requestQueue = []; // Очередь запросов
 let isProcessingQueue = false; // Флаг обработки очереди
@@ -354,18 +322,24 @@ async function processQueue() {
             } else if (chat.invite_link) {
                 result = chat.invite_link.split('/')[3];
             } else {
-                console.log(`Нет username или invite_link для канала ${id}`);
                 result = null;
             }
 
             // Сохраняем в кэш (TTL = 5 минут)
             rateLimitMap.set(id, { value: result, expiry: Date.now() + 5 * 60 * 1000 });
+            try {
+                const client = await pool.connect();
+                await client.query(`UPDATE user_chanels SET channel_link = $1 WHERE channel_id = $2`, [result, id]);
+                client.release();
+            }
+            catch (err) {
+                console.log(err);
+            }
 
             resolve(result);
         } catch (error) {
             const retryAfter = error.response.body.parameters.retry_after || 1; // Задержка в секундах
 
-            console.log(error.response.body.parameters.retry_after)
             console.log(`Превышен лимит запросов. Ожидание ${retryAfter} секунд.`);
             await new Promise(r => setTimeout(r, retryAfter * 100)); // Задержка
             requestQueue.unshift({ id, resolve, reject }); // Возвращаем запрос в начало очереди
@@ -375,14 +349,11 @@ async function processQueue() {
     isProcessingQueue = false;
 }
 
-
-
-
 const generateDeleteButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     // Сортируем каналы в алфавитном порядке
-    const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
-        return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
-    });
+    const sortedChannels = Object.entries(channels).sort(([, objA], [, objB]) =>
+        objA.name.toLowerCase().localeCompare(objB.name.toLowerCase())
+    );
 
     // Определяем общее количество страниц
     const totalChannels = sortedChannels.length;
@@ -418,12 +389,10 @@ const generateDeleteButtons = (page = 1, itemsPerPage = ITEMS_PER_PAGE) => {
     return { inline_keyboard: channelButtons, pageInfoText };
 };
 
-
-
 const generateGroupChannelButtons = (currentPage = 1) => {
-    const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
-        return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
-    });
+    const sortedChannels = Object.entries(channels).sort(([, objA], [, objB]) =>
+        objA.name.toLowerCase().localeCompare(objB.name.toLowerCase())
+    );
 
     const totalChannels = sortedChannels.length;
     const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
@@ -432,9 +401,9 @@ const generateGroupChannelButtons = (currentPage = 1) => {
     const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, totalChannels);
     const channelsOnPage = sortedChannels.slice(startIdx, endIdx);
 
-    const channelButtons = channelsOnPage.map(([id, title]) => {
+    const channelButtons = channelsOnPage.map(([id, channel]) => {
         return [{
-            text: `${title} ${selectedChannels1.includes(id) ? '✅' : '⬜️'}`,
+            text: `${channel.name} ${selectedChannels1.includes(id) ? '✅' : '⬜️'}`,
             callback_data: `group_${id}_${currentPage}`
         }];
     });
@@ -448,7 +417,7 @@ const generateGroupChannelButtons = (currentPage = 1) => {
     }
 
     const createGroupButton = [{ text: 'Создать группу', callback_data: 'confirm_create_group' }];
-    
+
     const mainMenuButton = [{ text: 'Главное меню', callback_data: 'main_menu' }];
 
     return [
@@ -463,7 +432,6 @@ const generateGroupButtons = () => {
     const sortedGroups = Object.entries(groups).sort(([nameA], [nameB]) => {
         return nameA.toLowerCase().localeCompare(nameB.toLowerCase());
     });
-    
     return sortedGroups.map(([name, channels]) => {
         return [{
             text: `${name} (${channels.length})`,
@@ -476,18 +444,18 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
     const channelIdsInGroup = (groups[groupName] || []).slice();
 
     channelIdsInGroup.sort((a, b) => {
-        const titleA = channels[a]?.toLowerCase() || '';
-        const titleB = channels[b]?.toLowerCase() || '';
+        const titleA = channels[a].name?.toLowerCase() || '';
+        const titleB = channels[b].name?.toLowerCase() || '';
         return titleA.localeCompare(titleB);
     });
 
     const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
     const endIdx = startIdx + ITEMS_PER_PAGE;
     const channelsOnPage = channelIdsInGroup.slice(startIdx, endIdx);
-    
+
     // Генерация кнопок для каналов с эмодзи
     const channelButtons = channelsOnPage.map((channelId) => {
-        const title = channels[channelId];
+        const title = channels[channelId].name || 'Без имени';
         const isSelected = toggleChannels.includes(channelId);
 
         return [{
@@ -522,34 +490,31 @@ const generateSelectableChannelButtonsForGroup = (groupName, currentPage = 1) =>
             { text: '📤 Отправить в группу', callback_data: 'send_in_group' }
         ]
     ];
-    
+
 
     // Объединение всех кнопок в один массив
     return [
         ...channelButtons,
-        navigationButtons.length > 0 ? [navigationButtons] : [], // Добавляем навигацию, если есть
+        navigationButtons.length > 0 ? navigationButtons : [], // Добавляем навигацию, если есть
         selectAllButton,
         ...actionButtons // Добавляем кнопки действий
     ];
 };
 
-
-
 const generateAddChannelButtonsForGroup = (groupName, currentPage = 1) => {
-    const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
-        return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
-    });
-
+    const sortedChannels = Object.entries(channels).sort(([, objA], [, objB]) =>
+        objA.name.toLowerCase().localeCompare(objB.name.toLowerCase())
+    );
     const totalChannels = sortedChannels.length;
-    const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+    const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
 
     const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
     const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, totalChannels);
     const channelsOnPage = sortedChannels.slice(startIdx, endIdx);
 
-    const channelButtons = channelsOnPage.map(([id, title]) => {
+    const channelButtons = channelsOnPage.map(([id, channel]) => {
         return [{
-            text: `${title} ${selectedChannels1.includes(id) ? '✅' : '⬜️'}`,
+            text: `${channel.name} ${selectedChannels1.includes(id) ? '✅' : '⬜️'}`,
             callback_data: `select_channel_${id}_${currentPage}`
         }];
     });
@@ -573,20 +538,20 @@ const generateAddChannelButtonsForGroup = (groupName, currentPage = 1) => {
 const generateRemoveChannelButtonsForGroup = (groupName, currentPage = 1) => {
     const channelIdsInGroup = groups[groupName] || [];
     const sortedChannelIds = channelIdsInGroup.sort((a, b) => {
-        const titleA = channels[a].toLowerCase();
-        const titleB = channels[b].toLowerCase();
+        const titleA = channels[a].name.toLowerCase();
+        const titleB = channels[b].name.toLowerCase();
         return titleA.localeCompare(titleB);
     });
 
-    const totalChannels = sortedChannelIds.length; 
-    const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
+    const totalChannels = sortedChannelIds.length;
+    const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
 
     const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
     const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, totalChannels);
     const channelsOnPage = sortedChannelIds.slice(startIdx, endIdx);
 
     const channelButtons = channelsOnPage.map((channelId) => {
-        const title = channels[channelId]; 
+        const title = channels[channelId].name;
         const isSelected = selectedChannelsForRemoval.includes(channelId);
         return [{
             text: `${title} ${isSelected ? '✅' : '⬜️'}`,
@@ -617,23 +582,23 @@ bot.on('callback_query', async (query) => {
     try {
         if (data === 'create_group') {
             selectedChannels1 = [];
-            const currentPage = 1; 
-        
-            const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
-                return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
-            });
-        
-            const totalChannels = sortedChannels.length; 
-            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
-        
+            const currentPage = 1;
+
+            const sortedChannels = Object.entries(channels).sort(([, objA], [, objB]) =>
+                objA.name.toLowerCase().localeCompare(objB.name.toLowerCase())
+            );
+
+            const totalChannels = sortedChannels.length;
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+
             const pageInfoText = `Выберите каналы для новой группы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
-        
+
             await bot.editMessageText(pageInfoText, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
                 reply_markup: {
                     inline_keyboard: [
-                        ...generateGroupChannelButtons(currentPage), 
+                        ...generateGroupChannelButtons(currentPage),
                         [
                         ]
                     ]
@@ -641,20 +606,20 @@ bot.on('callback_query', async (query) => {
             });
             return;
         }
-        
+
 
         if (data.startsWith('view_page_')) {
-            const currentPage = parseInt(data.split('_')[2]) || 1; 
-        
-            const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
-                return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
-            });
-        
+            const currentPage = parseInt(data.split('_')[2]) || 1;
+
+            const sortedChannels = Object.entries(channels).sort(([, objA], [, objB]) =>
+                objA.name.toLowerCase().localeCompare(objB.name.toLowerCase())
+            );
+
             const totalChannels = sortedChannels.length;
-            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
-        
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+
             const pageInfoText = `Выберите каналы для новой группы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
-        
+
             await bot.editMessageText(pageInfoText, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
@@ -663,26 +628,26 @@ bot.on('callback_query', async (query) => {
                 }
             });
             return;
-        }      
-        
+        }
+
         if (data.startsWith('group_')) {
             const parts = data.split('_');
             const channelId = parts[1];
             const currentPage = parseInt(parts[2]) || 1;
             const selectedChannel = channels[channelId];
-        
-            if (selectedChannels1.includes(channelId)) { 
-                selectedChannels1 = selectedChannels1.filter(id => id !== channelId); 
-                await bot.editMessageText(`Канал "${selectedChannel}" удалён из группы.\n\nВыбранные каналы: ${selectedChannels1.length > 0 ? selectedChannels1.map(id => channels[id]).join(', ') : 'Нет выбранных каналов'}`, {
+
+            if (selectedChannels1.includes(channelId)) {
+                selectedChannels1 = selectedChannels1.filter(id => id !== channelId);
+                await bot.editMessageText(`Канал "${selectedChannel.name}" удалён из группы.\n\nВыбранные каналы: ${selectedChannels1.length > 0 ? selectedChannels1.map(id => channels[id].name).join(', ') : 'Нет выбранных каналов'}`, {
                     chat_id: chatId,
                     message_id: query.message.message_id,
                     reply_markup: {
-                        inline_keyboard: generateGroupChannelButtons(currentPage) 
+                        inline_keyboard: generateGroupChannelButtons(currentPage)
                     }
                 });
             } else {
                 selectedChannels1.push(channelId);
-                await bot.editMessageText(`Канал "${selectedChannel}" добавлен в группу.\n\nВыбранные каналы: ${selectedChannels1.map(id => channels[id]).join(', ')}`, {
+                await bot.editMessageText(`Канал "${selectedChannel.name}" добавлен в группу.\n\nВыбранные каналы: ${selectedChannels1.map(id => channels[id].name).join(', ')}`, {
                     chat_id: chatId,
                     message_id: query.message.message_id,
                     reply_markup: {
@@ -692,17 +657,17 @@ bot.on('callback_query', async (query) => {
             }
             return;
         }
-        
-        if (data === 'confirm_create_group') { 
+
+        if (data === 'confirm_create_group') {
             await bot.editMessageText('Введите название для группы:', {
                 chat_id: chatId,
                 message_id: query.message.message_id
             });
-        
+
             bot.once('text', async (msg) => {
                 const groupName = msg.text.trim();
                 userId = msg.from.id;  // ID пользователя, создавшего группу
-        
+
                 // Проверяем допустимость имени группы
                 if (!groupName || groups[groupName]) {
                     await bot.sendMessage(chatId, 'Название группы недопустимо или уже существует. Попробуйте снова.', {
@@ -713,16 +678,16 @@ bot.on('callback_query', async (query) => {
                                 ]
                             ]
                         }
-                    });                 
+                    });
                     return;
                 }
-        
+
                 // Проверяем, выбраны ли каналы для группы
                 if (selectedChannels1 && selectedChannels1.length > 0) {
                     groups[groupName] = selectedChannels1;
-        
+
                     const client = await pool.connect();  // Подключение к базе данных
-        
+
                     try {
                         // Вставляем новую группу в таблицу user_groups
                         const insertGroupResult = await client.query(
@@ -730,19 +695,19 @@ bot.on('callback_query', async (query) => {
                             [userId, groupName]
                         );
                         const groupId = insertGroupResult.rows[0].id;  // Получаем ID новой группы
-        
+
                         // Вставляем каналы в таблицу group_channels
                         for (const channelId of selectedChannels1) {
                             await client.query(
-                                `INSERT INTO group_channel 
+                                `INSERT INTO group_channel
                                  (group_id, channel_id)
                                  VALUES ($1, $2)
                                  ON CONFLICT (group_id, channel_id) DO NOTHING`,
                                 [groupId, channelId]
                             );
                         }
-        
-                        await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: \n${selectedChannels1.map(id => channels[id]).join(', ')}`, {
+
+                        await bot.sendMessage(chatId, `Группа "${groupName}" создана с каналами: \n${selectedChannels1.map(id => channels[id].name).join(', ')}`, {
                             reply_markup: {
                                 inline_keyboard: [
                                     [
@@ -758,9 +723,9 @@ bot.on('callback_query', async (query) => {
                     } finally {
                         client.release();  // Освобождаем соединение с базой данных
                     }
-        
+
                     selectedChannels1 = [];
-        
+
                 } else {
                     // Ошибка, если каналы не были выбраны
                     await bot.sendMessage(chatId, 'Ошибка: каналы не выбраны.', {
@@ -775,10 +740,10 @@ bot.on('callback_query', async (query) => {
                 }
             });
             return;
-        }        
-        
+        }
+
         if (data === 'view_groups') {
-            if (Object.keys(groups).length === 0) {                
+            if (Object.keys(groups).length === 0) {
                 await bot.editMessageText('Пока нет доступных групп.', {
                     chat_id: chatId,
                     message_id: query.message.message_id,
@@ -792,7 +757,7 @@ bot.on('callback_query', async (query) => {
                 });
                 return;
             }
-    
+
             await bot.editMessageText('Выберите группу:', {
                 chat_id: chatId,
                 message_id: query.message.message_id,
@@ -804,38 +769,37 @@ bot.on('callback_query', async (query) => {
                         ]
                     ]
                 }
-            });         
+            });
         }
-        
+
         if (data.startsWith('view_group_')) {
             const parts = data.split('_');
-            const groupName = parts[2];  
+            const groupName = parts[2];
             let currentPage = parseInt(parts[3]) || 1;
-        
             const channelsInGroup = groups[groupName] || [];
             const totalChannels = channelsInGroup.length;
-            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
-        
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+
             if (currentPage < 1) {
                 currentPage = 1;
             }
-        
+
             if (totalChannels > 0) {
                 if (currentPage > totalPages) {
                     currentPage = totalPages;
                 }
-        
+
                 const startChannel = (currentPage - 1) * ITEMS_PER_PAGE + 1;
                 const endChannel = Math.min(currentPage * ITEMS_PER_PAGE, totalChannels);
                 toggleChannels = []
 
-                await bot.editMessageText( 
+                await bot.editMessageText(
                     `Группа "${groupName}" содержит следующие каналы (страница ${currentPage} из ${totalPages}, показываются ${startChannel}-${endChannel} из ${totalChannels}):`,
                     {
                         chat_id: chatId,
                         message_id: query.message.message_id,
                         reply_markup: {
-                            inline_keyboard: generateSelectableChannelButtonsForGroup(groupName, currentPage) 
+                            inline_keyboard: generateSelectableChannelButtonsForGroup(groupName, currentPage)
                         }
                     }
                 );
@@ -853,23 +817,23 @@ bot.on('callback_query', async (query) => {
                 });
             }
         }
-        
+
         if (data.startsWith('toggle_channel_')) {
             const parts = data.split('_');
             const channelId = parts[2];
             const groupName = parts[3];
-            const currentPage = parseInt(parts[4], 10) || 1; 
-        
+            const currentPage = parseInt(parts[4], 10) || 1;
+
             const isSelected = toggleChannels.includes(channelId);
-        
+
             if (isSelected) {
                 toggleChannels = toggleChannels.filter(id => id !== channelId);
             } else {
                 toggleChannels.push(channelId);
             }
-        
-            const newMarkup = generateSelectableChannelButtonsForGroup(groupName, currentPage); 
-        
+
+            const newMarkup = generateSelectableChannelButtonsForGroup(groupName, currentPage);
+
             const currentMessage = query.message.reply_markup;
             if (JSON.stringify(currentMessage.inline_keyboard) !== JSON.stringify(newMarkup)) {
                 await bot.editMessageReplyMarkup({
@@ -881,25 +845,25 @@ bot.on('callback_query', async (query) => {
             }
             return;
         }
-        
+
         if (data.startsWith('select_all_channels_')) {
             const parts = data.split('_');
             const groupName = parts[3];
             const action = parts[4];
             const currentPage = parseInt(parts[5], 10) || 1;
-        
+
             if (action === 'select') {
                 toggleChannels = groups[groupName] ? [...groups[groupName]] : [];
             } else {
                 toggleChannels = [];
             }
-        
+
             const newMarkup = generateSelectableChannelButtonsForGroup(groupName, currentPage);
-        
+
             const currentMessage = query.message.reply_markup;
             const currentMarkupString = JSON.stringify(currentMessage.inline_keyboard);
             const newMarkupString = JSON.stringify(newMarkup);
-        
+
             if (currentMarkupString !== newMarkupString) {
                 await bot.editMessageReplyMarkup({
                     inline_keyboard: newMarkup
@@ -910,23 +874,23 @@ bot.on('callback_query', async (query) => {
             }
             return;
         }
-        
-        
+
+
 
         if (data.startsWith('add_channel_to_group_')) {
             const groupName = data.split('_').pop();
             selectedChannels1 = [];
-            const currentPage = 1; 
-        
-            const sortedChannels = Object.entries(channels).sort(([, titleA], [, titleB]) => {
-                return titleA.toLowerCase().localeCompare(titleB.toLowerCase());
-            });
-        
-            const totalChannels = sortedChannels.length; 
-            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
-        
+            const currentPage = 1;
+
+            const sortedChannels = Object.entries(channels).sort(([, objA], [, objB]) =>
+                objA.name.toLowerCase().localeCompare(objB.name.toLowerCase())
+            );
+
+            const totalChannels = sortedChannels.length;
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+
             const pageInfoText = `Добавляем каналы в группу "${groupName}". Выберите каналы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
-        
+
             await bot.editMessageText(pageInfoText, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
@@ -936,12 +900,12 @@ bot.on('callback_query', async (query) => {
             });
             return;
         }
-        
+
         if (data.startsWith('add_channel_page_')) {
             const parts = data.split('_');
             const groupName = parts[3];
             const currentPage = parseInt(parts[4]) || 1;
-        
+
             await bot.editMessageText(`Добавляем каналы в группу "${groupName}". Выберите каналы:\n\nСтраница ${currentPage} из ${Math.ceil(Object.entries(channels).length / ITEMS_PER_PAGE)} (всего каналов: ${Object.entries(channels).length})`, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
@@ -951,18 +915,18 @@ bot.on('callback_query', async (query) => {
             });
             return;
         }
-        
+
         if (data.startsWith('select_channel_')) {
             const parts = data.split('_');
             const channelId = parts[2];
             const currentPage = parseInt(parts[3]) || 1;
-        
+
             if (selectedChannels1.includes(channelId)) {
                 selectedChannels1 = selectedChannels1.filter(id => id !== channelId);
             } else {
                 selectedChannels1.push(channelId);
             }
-        
+
             await bot.editMessageReplyMarkup({
                 inline_keyboard: generateAddChannelButtonsForGroup(query.message.text.split('"')[1], currentPage)
             }, {
@@ -971,7 +935,7 @@ bot.on('callback_query', async (query) => {
             });
             return;
         }
-        
+
         if (data.startsWith('confirm_add_to_group_')) {
             const groupName = data.split('_').pop();
 
@@ -1002,13 +966,13 @@ bot.on('callback_query', async (query) => {
                     }
                 }
 
-                const channelNames = channelIds.map(id => channels[id]);
+                const channelNames = channelIds.map(id => channels[id].name);
 
                 try {
                     // Вставляем каналы в таблицу group_channel
                     for (const channelId of channelIds) {
                         await client.query(
-                            `INSERT INTO group_channel (group_id, channel_id) 
+                            `INSERT INTO group_channel (group_id, channel_id)
                             VALUES ($1, $2)
                             ON CONFLICT (group_id, channel_id) DO NOTHING`,
                             [groupId, channelId] // groupId и channelId
@@ -1031,7 +995,7 @@ bot.on('callback_query', async (query) => {
                     console.error('Ошибка добавления каналов в группу:', error);
                     await bot.sendMessage(chatId, 'Произошла ошибка при добавлении каналов в группу. Попробуйте еще раз.');
                 }
-                
+
                 client.release(); // Освобождаем соединение с базой данных
             }
 
@@ -1050,18 +1014,18 @@ bot.on('callback_query', async (query) => {
             }
             return;
         }
-        
+
         if (data.startsWith('remove_channel_from_group_')) {
             const groupName = data.split('_').pop();
-            selectedChannelsForRemoval = []; 
-            const currentPage = 1; 
-        
+            selectedChannelsForRemoval = [];
+            const currentPage = 1;
+
             const channelIdsInGroup = groups[groupName] || [];
-            const totalChannels = channelIdsInGroup.length; 
+            const totalChannels = channelIdsInGroup.length;
             const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
-        
+
             const pageInfoText = `Удаляем каналы из группы "${groupName}". Выберите каналы:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
-        
+
             await bot.editMessageText(pageInfoText, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
@@ -1071,14 +1035,14 @@ bot.on('callback_query', async (query) => {
             });
             return;
         }
-        
+
         if (data.startsWith('select_remove_channel_')) {
             const parts = data.split('_');
-            const channelId = parts[3]; 
+            const channelId = parts[3];
             const currentPage = parseInt(parts[4]);
-        
+
             const groupName = query.message.text.split('"')[1];
-        
+
             if (selectedChannelsForRemoval.includes(channelId)) {
                 selectedChannelsForRemoval = selectedChannelsForRemoval.filter(id => id !== channelId);
             } else {
@@ -1092,40 +1056,39 @@ bot.on('callback_query', async (query) => {
             });
             return;
         }
-        
+
         if (data.startsWith('remove_channel_page_')) {
             const parts = data.split('_');
             const groupName = parts.slice(3, parts.length - 1).join('_');
             const currentPage = parseInt(parts[parts.length - 1]);
-        
-            console.log(`Current group name: ${groupName}, current page: ${currentPage}`);
-        
+
+
             await bot.editMessageText(`Удаляем каналы из группы "${groupName}". Выберите каналы:`, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
                 reply_markup: {
-                    inline_keyboard: generateRemoveChannelButtonsForGroup(groupName, currentPage) 
+                    inline_keyboard: generateRemoveChannelButtonsForGroup(groupName, currentPage)
                 }
             });
             return;
-        }        
-        
+        }
+
         if (data.startsWith('confirm_remove_from_group_')) {
             const groupName = data.split('_').pop();
-        
+
             try {
                 // Получаем ID группы по имени
                 const groupId = await getGroupIdByName(groupName);
-                
+
                 if (selectedChannelsForRemoval.length > 0) {
                     const channelNames = selectedChannelsForRemoval.map(id => channels[id]);
-        
+
                     // Удаляем каналы из группы в базе данных по ID группы
                     await removeChannelsByIdFromDB(groupId, selectedChannelsForRemoval);
-                
+
                     // Обновляем локальную структуру данных
                     groups[groupName] = groups[groupName].filter(id => !selectedChannelsForRemoval.includes(id));
-        
+
                     await bot.editMessageText(`Каналы ${channelNames.join(', ')} удалены из группы "${groupName}".`, {
                         chat_id: chatId,
                         message_id: query.message.message_id,
@@ -1135,7 +1098,7 @@ bot.on('callback_query', async (query) => {
                             ]
                         }
                     });
-        
+
                     selectedChannelsForRemoval = [];
                 } else {
                     await bot.editMessageText('Ошибка: не выбраны каналы для удаления.', {
@@ -1162,45 +1125,45 @@ bot.on('callback_query', async (query) => {
             }
             return;
         }
-        
-        
-        
-        
+
+
+
+
         async function removeChannelsByIdFromDB(groupId, channelIds) {
             // Запрос на удаление каналов из указанной группы
             const query = `
-                DELETE FROM group_channel 
+                DELETE FROM group_channel
                 WHERE group_id = $1 AND channel_id = ANY($2::bigint[])`;
             const values = [groupId, channelIds];
             await pool.query(query, values);
         }
-        
-        
+
+
         async function getGroupIdByName(groupName) {
             const query = `SELECT id FROM user_group WHERE group_name = $1`; // Убедитесь, что названия таблиц и полей соответствуют вашей БД
             const values = [groupName];
-        
+
             const result = await pool.query(query, values);
-            
+
             if (result.rows.length > 0) {
                 return result.rows[0].id; // Возвращаем ID группы
             } else {
                 throw new Error(`Группа с именем "${groupName}" не найдена.`);
             }
-        }           
-        
-        
+        }
+
+
         if (data.startsWith('remove_channel_page_')) {
             const parts = data.split('_');
             const groupName = parts[2];
             let currentPage = parseInt(parts[3]) || 1;
-        
+
             const totalChannels = (groups[groupName] || []).length;
-            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE); 
-        
+            const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
+
             if (currentPage < 1) currentPage = 1;
             if (currentPage > totalPages) currentPage = totalPages;
-        
+
             await bot.editMessageText(`Удаляем каналы из группы "${groupName}". Выберите каналы:`, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
@@ -1210,10 +1173,10 @@ bot.on('callback_query', async (query) => {
             });
             return;
         }
-  
+
         if (data.startsWith('edit_group_')) {
             const groupName = data.split('_').pop();
-            
+
             if (!groups[groupName]) {
                 await bot.editMessageText(`Группа "${groupName}" не найдена.`, {
                     chat_id: chatId,
@@ -1226,18 +1189,18 @@ bot.on('callback_query', async (query) => {
                         ]
                     }
                 });
-                return; 
+                return;
             }
-        
+
             await bot.editMessageText(`Введите новое название для группы "${groupName}":`, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
             });
-        
+
             bot.once('text', async (msg) => {
                 const newGroupName = msg.text;
                 userId = msg.from.id;
-                
+
                 if (newGroupName === groupName) {
                     await bot.sendMessage(chatId, `Название группы осталось "${groupName}", так как оно не изменилось.`, {
                         reply_markup: {
@@ -1255,11 +1218,11 @@ bot.on('callback_query', async (query) => {
                             'UPDATE user_group SET group_name = $1 WHERE group_name = $2 AND user_id = $3',
                             [newGroupName, groupName, userId]
                         );
-        
+
                         if (result.rowCount > 0) {
-                            groups[newGroupName] = groups[groupName]; 
+                            groups[newGroupName] = groups[groupName];
                             delete groups[groupName];
-        
+
                             await bot.sendMessage(chatId, `Название группы изменено на "${newGroupName}".`, {
                                 reply_markup: {
                                     inline_keyboard: [
@@ -1295,21 +1258,21 @@ bot.on('callback_query', async (query) => {
                 }
             });
         }
-        
+
         if (data.startsWith('delete_group_')) {
             const groupName = data.split('_').pop();
-        
+
             try {
                 // Удаляем каналы из группы
                 await deleteChannelsFromGroup(groupName);
-        
+
                 // Удаляем группу из базы данных
                 await deleteGroupFromDB(groupName);
-        
+
                 // Удаляем группу из локальной структуры данных
                 if (groups[groupName]) {
                     delete groups[groupName];
-        
+
                     await bot.editMessageText(`Группа "${groupName}" и все связанные каналы были удалены.`, {
                         chat_id: chatId,
                         message_id: query.message.message_id,
@@ -1321,7 +1284,7 @@ bot.on('callback_query', async (query) => {
                             ]
                         }
                     });
-        
+
                 } else {
                     await bot.editMessageText(`Группа "${groupName}" не найдена.`, {
                         chat_id: chatId,
@@ -1355,43 +1318,43 @@ bot.on('callback_query', async (query) => {
             const query = `SELECT id FROM user_group WHERE group_name = $1`;
             const values = [groupName];
             const result = await pool.query(query, values);
-            
+
             if (result.rows.length > 0) {
                 return result.rows[0].id; // Предполагается, что ID группы находится в первом элементе результата
             } else {
                 throw new Error('Группа не найдена');
             }
         }
-        
-        
+
+
         async function deleteChannelsFromGroup(groupName) {
             const groupId = await GroupIdByName(groupName); // Получаем ID группы по имени
             const query = `DELETE FROM group_channel WHERE group_id = $1`; // Предполагаем, что у вас есть поле group_id в таблице
             const values = [groupId];
             await pool.query(query, values);
         }
-        
-        
-        
+
+
+
         async function deleteGroupFromDB(groupName) {
             const query = `DELETE FROM user_group WHERE group_name = $1`;
             const values = [groupName];
             await pool.query(query, values);
         }
-        
-    } 
+
+    }
 
     catch (error) {
         console.error('Ошибка в обработке callback_query:', error);
-        await bot.editMessageText('Произошла ошибка. Пожалуйста, попробуйте еще раз.',{
+        await bot.editMessageText('Произошла ошибка. Пожалуйста, попробуйте еще раз.', {
             chat_id: chatId,
             message_id: query.message.message_id,
         });
     }
 
-    if (data.startsWith('settings_group_')) { 
+    if (data.startsWith('settings_group_')) {
         const groupName = data.split('_')[2];
-    
+
         await bot.editMessageText(`Настройки группы "${groupName}":`, {
             chat_id: chatId,
             message_id: query.message.message_id,
@@ -1412,10 +1375,10 @@ bot.on('callback_query', async (query) => {
             }
         });
     }
-    
+
 
     if (data === 'main_menu') {
-        const chatId = query.message.chat.id; 
+        const chatId = query.message.chat.id;
         await bot.editMessageText('Что вы хотите сделать:', {
             chat_id: chatId,
             message_id: query.message.message_id,
@@ -1455,23 +1418,8 @@ bot.onText(/\/channels/, async (msg) => {
         }
 
         // Пользователь найден и имеет полный доступ, загружаем каналы и группы из базы данных
-        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
-        channels = {};
-        for (const row of channelResult.rows) {
-            channels[row.channel_id] = row.channel_name;
-        }
-
-        const groupResult = await client.query('SELECT id, group_name FROM user_group');
-        groups = {};
-        for (const row of groupResult.rows) {
-            if (!groups[row.group_name]) {
-                groups[row.group_name] = [];
-            }
-            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
-            for (const row1 of groupChannels.rows) {
-                groups[row.group_name].push(row1.channel_id);
-            }
-        }
+        channels = await get_channels(client);
+        groups = await get_groups(client);
 
         // Проверка на наличие каналов и отправка сообщения с кнопками
         if (Object.keys(channels).length === 0) {
@@ -1483,25 +1431,25 @@ bot.onText(/\/channels/, async (msg) => {
             return;
         }
 
-    try {
-        // Ожидаем результат от функции generateChannelButtons
-        const channelButtons = await generateChannelButtons();
+        try {
+            // Ожидаем результат от функции generateChannelButtons
+            const channelButtons = await generateChannelButtons();
 
-        // Проверяем, что возвращается массив массивов
-        if (Array.isArray(channelButtons) && channelButtons.every(item => Array.isArray(item))) {
-            // Отправляем сообщение с кнопками
+            // Проверяем, что возвращается массив массивов
+            if (Array.isArray(channelButtons) && channelButtons.every(item => Array.isArray(item))) {
+                // Отправляем сообщение с кнопками
                 await bot.sendMessage(chatId, `Выберите каналы для отправки: Всего каналов - ${Object.keys(channels).length}`, {
                     reply_markup: {
                         inline_keyboard: channelButtons // Должен быть массив массивов
-                }
-            });
-        } else {
-            throw new Error("Кнопки не в правильном формате");
+                    }
+                });
+            } else {
+                throw new Error("Кнопки не в правильном формате");
             }
         } catch (error) {
-        console.error("Ошибка при генерации кнопок:", error);
-        await bot.sendMessage(chatId, "Произошла ошибка при загрузке каналов. Попробуйте позже.");
-    }
+            console.error("Ошибка при генерации кнопок:", error);
+            await bot.sendMessage(chatId, "Произошла ошибка при загрузке каналов. Попробуйте позже.");
+        }
 
     } catch (error) {
         console.error('Ошибка при получении каналов и групп:', error);
@@ -1516,7 +1464,7 @@ function formatTextWithEntities(text, entities) {
     entities.reverse().forEach(entity => {
         const { offset, length, type } = entity;
         const entityText = formattedText.slice(offset, offset + length);
-        
+
         let formattedEntity;
         switch (type) {
             case 'bold':
@@ -1553,7 +1501,6 @@ function formatTextWithEntities(text, entities) {
 async function getChannelUsernameById(channelId) {
     try {
         const chat = await bot.getChat(channelId);
-        console.log('channelId', channelId, chat);
 
         if (chat.username) {
             return chat.username
@@ -1561,7 +1508,6 @@ async function getChannelUsernameById(channelId) {
 
         if (chat.invite_link) {
             const chatUrl = chat.invite_link
-            console.log(chatUrl.split('/')[3])
             return chatUrl.split('/')[3];
         }
 
@@ -1579,10 +1525,10 @@ bot.on('callback_query', async (callbackQuery) => {
 
     if (callbackData === 'delete_channel') {
         selectedForDeletion = []; // Сбрасываем выбранные для удаления каналы
-        
+
         // Генерируем кнопки для удаления, чтобы получить информацию о страницах
         const { inline_keyboard, pageInfoText } = generateDeleteButtons(1); // Передаем 1, если хотите показать первую страницу
-    
+
         // Изменяем сообщение
         await bot.editMessageText(pageInfoText, {
             chat_id: chatId,
@@ -1593,22 +1539,22 @@ bot.on('callback_query', async (callbackQuery) => {
         });
         return;
     }
-    
-    
+
+
 
     if (callbackData.startsWith('delete_')) {
         const [action, channelId, page] = callbackData.split('_'); // Извлекаем все части callback_data
-    
+
         // Проверяем существование канала в списке и добавляем/удаляем из выбранных
         if (selectedForDeletion.includes(channelId)) {
             selectedForDeletion = selectedForDeletion.filter(id => id !== channelId);
         } else {
             selectedForDeletion.push(channelId);
         }
-    
+
         // Генерируем обновлённые кнопки для текущей страницы
         const { inline_keyboard, pageInfoText } = generateDeleteButtons(parseInt(page, 10), ITEMS_PER_PAGE);
-    
+
         // Обновляем сообщение с новыми кнопками
         await bot.editMessageText(pageInfoText, {
             chat_id: chatId,
@@ -1617,18 +1563,18 @@ bot.on('callback_query', async (callbackQuery) => {
                 inline_keyboard
             }
         });
-    
+
         return;
     }
-    
-    
-    
+
+
+
     if (callbackData.startsWith('delete_page_')) {
         const currentPage = parseInt(callbackData.split('_')[2], 10); // Извлекаем текущую страницу
-    
+
         // Генерируем кнопки для текущей страницы
         const { inline_keyboard, pageInfoText } = generateDeleteButtons(currentPage, ITEMS_PER_PAGE);
-    
+
         // Изменяем сообщение
         await bot.editMessageText(pageInfoText, {
             chat_id: chatId,
@@ -1639,7 +1585,7 @@ bot.on('callback_query', async (callbackQuery) => {
         });
         return;
     }
-    
+
 
 
     if (callbackData.startsWith('spage_')) {
@@ -1647,7 +1593,7 @@ bot.on('callback_query', async (callbackQuery) => {
         const totalChannels = Object.keys(channels).length;
         const totalPages = Math.ceil(totalChannels / ITEMS_PER_PAGE);
         const pageInfoText = `Выберите каналы для отправки:\n\nСтраница ${currentPage} из ${totalPages} (всего каналов: ${totalChannels})`;
-    
+
         try {
             await bot.editMessageText(pageInfoText, {
                 chat_id: callbackQuery.message.chat.id, // Исправлено: корректный chat_id
@@ -1659,16 +1605,16 @@ bot.on('callback_query', async (callbackQuery) => {
         } catch (err) {
             console.error('Ошибка при редактировании сообщения:', err);
         }
-    
+
         return;
     }
-    
-    
+
+
 
     // Логика удаления выбранных каналов
     if (callbackData === 'remove_selected') {
         const client = await pool.connect(); // Подключаемся к базе данных
-    
+
         try {
             // Удаляем каналы из базы данных и локального списка
             for (const channelId of selectedForDeletion) {
@@ -1677,30 +1623,30 @@ bot.on('callback_query', async (callbackQuery) => {
                     console.error(`Некорректный идентификатор канала: ${channelId}`);
                     continue;
                 }
-    
+
                 delete channels[channelId]; // Удаляем канал из локального объекта
-    
+
                 // Удаляем канал из таблицы user_chanels
                 await client.query(
-                    `DELETE FROM user_chanels 
+                    `DELETE FROM user_chanels
                      WHERE channel_id = $1 AND user_id = $2`,
                     [parsedChannelId, userId]
                 );
-    
+
                 // Удаляем канал из таблицы group_channel
                 await client.query(
-                    `DELETE FROM group_channel 
+                    `DELETE FROM group_channel
                      WHERE channel_id = $1`,
                     [parsedChannelId]
                 );
             }
-    
+
             // Очищаем массив выбранных каналов
             selectedForDeletion = [];
-    
+
             // Сообщаем об успешном удалении
             await bot.sendMessage(chatId, 'Выбранные каналы успешно удалены.');
-    
+
             // Генерируем основное меню каналов
             const { inline_keyboard, pageInfoText } = generateDeleteButtons(1, ITEMS_PER_PAGE);
             await bot.editMessageText(pageInfoText, {
@@ -1716,11 +1662,11 @@ bot.on('callback_query', async (callbackQuery) => {
         } finally {
             client.release(); // Освобождаем соединение
         }
-    
+
         return;
     }
-    
-    
+
+
 
     if (callbackData === 'add_channel') {
         isAwaitingChannel = true;
@@ -1741,8 +1687,8 @@ bot.on('callback_query', async (callbackQuery) => {
         let mediaGroup = [];
         let isGroupProcessing = false;
         let mediaTimeout;
-        let textToSend = '';        
-        
+        let textToSend = '';
+
         const finalizeMediaGroup = async () => {
             if (mediaGroup.length > 0) {
                 isSending = true;
@@ -1750,7 +1696,6 @@ bot.on('callback_query', async (callbackQuery) => {
                 const fromChatId = originalMessage.fromChatId;
                 const messageId = originalMessage.messageId;
 
-                console.log ('fromChatId', fromChatId, messageId)
                 for (const channelId of channelsToSend) {
                     try {
                         if (fromChatId && messageId) {
@@ -1758,15 +1703,14 @@ bot.on('callback_query', async (callbackQuery) => {
                                 const copyMediaGroup = mediaGroup.map((item) => {
                                     return { ...item };
                                 });
-                                const channelUsername = await getChannelUsernameById(fromChatId)
+                                const channelUsername = await getChannelUsernameById(fromChatId);
                                 const originalMessageText = originalMessage.caption || 'Текст сообщения недоступен';
                                 const fromChatTitle = originalMessage.fromChatTitle || 'Неизвестный источник';
-                                console.log('channelUsername', channelUsername)
                                 const fromChatLink = `https://t.me/${channelUsername}/${messageId}`;
-                        
+
                                 // Строим сообщение с шапкой
                                 const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${originalMessageText}`;
-                                
+
                                 const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
 
                                 const textMessageId = sentMessage[0].message_id;
@@ -1777,20 +1721,19 @@ bot.on('callback_query', async (callbackQuery) => {
                                     parse_mode: 'Markdown'
                                 });
                                 selectedChannels = [];
-                            }
-                            catch (error) {
+                            } catch (error) {
                                 console.error(`Ошибка пересылки в канал ${channelId}:`, error);
                                 const copyMediaGroup = mediaGroup.map((item) => {
                                     return { ...item };
                                 });
-                        
+
                                 const originalMessageText = originalMessage.caption || 'Текст сообщения недоступен';
                                 const fromChatTitle = originalMessage.fromChatTitle || 'Неизвестный источник';
                                 const fromChatLink = `https://t.me/${fromChatTitle}`;
-                        
+
                                 // Строим сообщение с шапкой
                                 const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${originalMessageText}`;
-                                
+
                                 const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
                                 const messageId = sentMessage[0].message_id;
 
@@ -1802,23 +1745,22 @@ bot.on('callback_query', async (callbackQuery) => {
 
                                 selectedChannels = [];
                             }
-                                
-                        }
-                        else {
-                            console.log('channelId', channelId)
-                            const channelTitle = channels[channelId];
-                            const channelUsername = await getChannelUsernameById(channelId);
-                            console.log('channelUsername', channelUsername)
-                            // if (!channelUsername) {
-                            //     console.error(`Канал с ID ${channelId} не имеет username.`);
-                            //     continue;
-                            // }
+
+                        } else {
+                            const channel = channels[channelId];
+                            const channelTitle = channel.name;
+                            let channelUsername;
+                            if (channel.link) {
+                                channelUsername = channel.link;
+                            } else {
+                                channelUsername = await getChannelUsernameById(channelId);
+                            }
 
                             const copyMediaGroup = mediaGroup.map((item) => {
                                 return { ...item };
                             });
 
-                            const originalMessageText = copyMediaGroup[0].caption;    
+                            const originalMessageText = copyMediaGroup[0].caption;
                             const hyperlinkText = `${originalMessageText}\n\nПодписывайтесь на канал - [${channelTitle}](https://t.me/${channelUsername})`;
                             const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
                             const messageId = sentMessage[0].message_id;
@@ -1834,6 +1776,9 @@ bot.on('callback_query', async (callbackQuery) => {
                     } catch (error) {
                         console.error(`Ошибка отправки в канал ${channelId}:`, error);
                     }
+
+                    // Delay of 0.1 seconds
+                    await new Promise(resolve => setTimeout(resolve, 100));
                 }
 
                 await bot.sendMessage(chatId, 'Медиа-группа успешно отправлена.');
@@ -1843,15 +1788,15 @@ bot.on('callback_query', async (callbackQuery) => {
             }
             bot.removeListener('message', handleMediaMessage);
         };
-        
+
         const handleMediaMessage = async (msg) => {
             if (isSending) return;
-        
+            console.log('msg', msg)
             if (msg.media_group_id) {
                 isGroupProcessing = true;
-        
+
                 clearTimeout(mediaTimeout);
-        
+
                 if (msg.photo) {
                     mediaGroup.push({
                         type: 'photo',
@@ -1862,7 +1807,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         fromChatTitle: msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
                     });
                 }
-                
+
                 if (msg.video) {
                     mediaGroup.push({
                         type: 'video',
@@ -1873,7 +1818,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         fromChatTitle: msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник' // Добавляем title
                     });
                 }
-        
+
                 mediaTimeout = setTimeout(finalizeMediaGroup, 2000);
             } else if (!msg.media_group_id && isGroupProcessing) {
                 clearTimeout(mediaTimeout);
@@ -1881,25 +1826,32 @@ bot.on('callback_query', async (callbackQuery) => {
             } else if (!isGroupProcessing) {
                 const originalText = msg.text || msg.caption || '';
                 const textToSend = `${formatTextWithEntities(originalText, msg.entities || [])}`;
-        
+
                 if (msg.photo || msg.video) {
                     // Если есть фото или видео, отправляем медиафайлы с текстом
                     for (const channelId of channelsToSend) {
-                        const channelTitle = channels[channelId];
-                        let channelUsername = await getChannelUsernameById(channelId);
+                        const channel = channels[channelId];
+                        const channelTitle = channel.name;
+                        let channelUsername;
+                        if (channel.link) {
+                            channelUsername = channel.link;
+                        } else {
+                            channelUsername = await getChannelUsernameById(channelId);
+                        }
                         const fromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
                         const messageId = msg.forward_from_message_id || null
                         const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
-        
+
                         // if (!channelUsername) {
                         //     console.error(`Канал с ID ${channelId} не имеет username.`);
                         //     channelUsername = 'Переслано'
                         // }
-        
+
                         if (msg.photo) {
                             if (fromChatId) {
                                 let channelUsername = await getChannelUsernameById(channelId);
-                                let fromChannelUsername = await getChannelUsernameById(fromChatId);
+                                let fromChannelUsername = await fetchChannelUsernameById(fromChatId);
+
                                 const fromChatLink = `https://t.me/${fromChannelUsername}/${messageId}`;
                                 const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${textToSend}`;
                                 try {
@@ -1937,7 +1889,7 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             }
                         }
-        
+
                         if (msg.video) {
                             if (fromChatId) {
                                 let channelUsername = await getChannelUsernameById(channelId);
@@ -1979,29 +1931,37 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             }
                         }
+
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
-                } 
-                
-              else {
-                    
+                }
+
+                else {
+
                     if (processingMessage) {
                         return; // Skip if a message is already being processed
                     }
-                
+
                     processingMessage = true;  // Set flag to indicate processing
-                
+
                     // Если только текст, отправляем текстовое сообщение с гиперссылкой
                     for (const channelId of channelsToSend) {
                         const fromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
                         const messageId = msg.forward_from_message_id || null;
                         const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник';
-                        const channelTitle = channels[channelId];
-                        let channelUsername = await getChannelUsernameById(channelId);
-                
+                        const channel = channels[channelId];
+                        const channelTitle = channel.name;
+                        let channelUsername;
+                        if (channel.link) {
+                            channelUsername = channel.link;
+                        } else {
+                            channelUsername = await getChannelUsernameById(channelId);
+                        }
+
                         if (!channelUsername) {
                             console.error(`Канал с ID ${channelId} не имеет username.`);
                         }
-                
+
                         if (fromChatId) {
                             let fromChannelUsername = await getChannelUsernameById(fromChatId);
                             const fromChatLink = `https://t.me/${fromChannelUsername}/${messageId}`;
@@ -2027,8 +1987,10 @@ bot.on('callback_query', async (callbackQuery) => {
                             }
                             selectedChannels = [];
                         }
+
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
-                
+
                     processingMessage = false;  // Reset flag after processing
                 }
                 bot.removeListener('message', handleMediaMessage);
@@ -2041,7 +2003,7 @@ bot.on('callback_query', async (callbackQuery) => {
             if (selectedChannels.length === Object.keys(channels).length) {
                 // Если все каналы уже выбраны, отменяем выбор
                 selectedChannels = [];
-                
+
                 // Обновляем текст сообщения
                 await bot.editMessageText('Выбор отменен. Ни один канал не выбран.', {
                     chat_id: chatId,
@@ -2053,7 +2015,7 @@ bot.on('callback_query', async (callbackQuery) => {
             } else {
                 // Если не все каналы выбраны, выбираем все
                 selectedChannels = Object.keys(channels);
-                
+
                 // Обновляем текст сообщения
                 await bot.editMessageText('Выбраны все каналы.', {
                     chat_id: chatId,
@@ -2067,7 +2029,7 @@ bot.on('callback_query', async (callbackQuery) => {
             console.error('Ошибка обработки действия select_all:', err);
         }
     }
-     else if (callbackData === 'send_in_group') {
+    else if (callbackData === 'send_in_group') {
         const channelsToSend = toggleChannels;
         if (channelsToSend.length === 0) {
             await bot.sendMessage(chatId, 'Нет выбранных каналов.');
@@ -2079,7 +2041,7 @@ bot.on('callback_query', async (callbackQuery) => {
         let mediaGroup = [];
         let isGroupProcessing = false;
         let mediaTimeout;
-        let textToSend = '';      
+        let textToSend = '';
 
         const finalizeMediaGroup = async () => {
             if (mediaGroup.length > 0) {
@@ -2097,12 +2059,11 @@ bot.on('callback_query', async (callbackQuery) => {
                                 const channelUsername = await getChannelUsernameById(fromChatId)
                                 const originalMessageText = originalMessage.caption || 'Текст сообщения недоступен';
                                 const fromChatTitle = originalMessage.fromChatTitle || 'Неизвестный источник';
-                                console.log('channelUsername', channelUsername)
                                 const fromChatLink = `https://t.me/${channelUsername}/${messageId}`;
-                        
+
                                 // Строим сообщение с шапкой
                                 const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${originalMessageText}`;
-                                
+
                                 const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
 
                                 const textMessageId = sentMessage[0].message_id;
@@ -2119,14 +2080,14 @@ bot.on('callback_query', async (callbackQuery) => {
                                 const copyMediaGroup = mediaGroup.map((item) => {
                                     return { ...item };
                                 });
-                        
+
                                 const originalMessageText = originalMessage.caption || 'Текст сообщения недоступен';
                                 const fromChatTitle = originalMessage.fromChatTitle || 'Неизвестный источник';
                                 const fromChatLink = `https://t.me/${fromChatTitle}`;
-                        
+
                                 // Строим сообщение с шапкой
                                 const messageText = `📢 Переслано из [${fromChatTitle}](${fromChatLink}):\n\n${originalMessageText}`;
-                                
+
                                 const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
                                 const messageId = sentMessage[0].message_id;
 
@@ -2138,13 +2099,17 @@ bot.on('callback_query', async (callbackQuery) => {
 
                                 selectedChannels = [];
                             }
-                                
+
                         }
                         else {
-                            console.log('channelId', channelId)
-                            const channelTitle = channels[channelId];
-                            const channelUsername = await getChannelUsernameById(channelId);
-                            console.log('channelUsername', channelUsername)
+                            const channel = channels[channelId];
+                            const channelTitle = channel.name;
+                            let channelUsername;
+                            if (channel.link) {
+                                channelUsername = channel.link;
+                            } else {
+                                channelUsername = await getChannelUsernameById(channelId);
+                            }
                             // if (!channelUsername) {
                             //     console.error(`Канал с ID ${channelId} не имеет username.`);
                             //     continue;
@@ -2154,7 +2119,7 @@ bot.on('callback_query', async (callbackQuery) => {
                                 return { ...item };
                             });
 
-                            const originalMessageText = copyMediaGroup[0].caption;    
+                            const originalMessageText = copyMediaGroup[0].caption;
                             const hyperlinkText = `${originalMessageText}\n\nПодписывайтесь на канал - [${channelTitle}](https://t.me/${channelUsername})`;
                             const sentMessage = await bot.sendMediaGroup(channelId, copyMediaGroup);
                             const messageId = sentMessage[0].message_id;
@@ -2170,6 +2135,8 @@ bot.on('callback_query', async (callbackQuery) => {
                     } catch (error) {
                         console.error(`Ошибка отправки в канал ${channelId}:`, error);
                     }
+
+                    await new Promise(resolve => setTimeout(resolve, 100));
                 }
                 await bot.sendMessage(chatId, 'Медиа-группа успешно отправлена.');
                 mediaGroup = [];
@@ -2177,16 +2144,16 @@ bot.on('callback_query', async (callbackQuery) => {
                 isSending = false;
             }
             bot.removeListener('message', handleMediaMessage);
-        };       
+        };
 
         const handleMediaMessage = async (msg) => {
             if (isSending) return;
-        
+
             if (msg.media_group_id) {
                 isGroupProcessing = true;
-        
+
                 clearTimeout(mediaTimeout);
-        
+
                 if (msg.photo) {
                     mediaGroup.push({
                         type: 'photo',
@@ -2197,7 +2164,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         fromChatTitle: msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
                     });
                 }
-                
+
                 if (msg.video) {
                     mediaGroup.push({
                         type: 'video',
@@ -2208,7 +2175,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         fromChatTitle: msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник' // Добавляем title
                     });
                 }
-        
+
                 mediaTimeout = setTimeout(finalizeMediaGroup, 2000);
             } else if (!msg.media_group_id && isGroupProcessing) {
                 clearTimeout(mediaTimeout);
@@ -2216,21 +2183,27 @@ bot.on('callback_query', async (callbackQuery) => {
             } else if (!isGroupProcessing) {
                 const originalText = msg.text || msg.caption || '';
                 const textToSend = `${formatTextWithEntities(originalText, msg.entities || [])}`;
-        
+
                 if (msg.photo || msg.video) {
                     // Если есть фото или видео, отправляем медиафайлы с текстом
                     for (const channelId of channelsToSend) {
-                        const channelTitle = channels[channelId];
-                        let channelUsername = await getChannelUsernameById(channelId);
+                        const channel = channels[channelId];
+                        const channelTitle = channel.name;
+                        let channelUsername;
+                        if (channel.link) {
+                            channelUsername = channel.link;
+                        } else {
+                            channelUsername = await getChannelUsernameById(channelId);
+                        }
                         const fromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
                         const messageId = msg.forward_from_message_id || null
                         const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник'
-        
+
                         // if (!channelUsername) {
                         //     console.error(`Канал с ID ${channelId} не имеет username.`);
                         //     channelUsername = 'Переслано'
                         // }
-        
+
                         if (msg.photo) {
                             if (fromChatId) {
                                 let channelUsername = await getChannelUsernameById(channelId);
@@ -2272,7 +2245,7 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             }
                         }
-        
+
                         if (msg.video) {
                             if (fromChatId) {
                                 let channelUsername = await getChannelUsernameById(channelId);
@@ -2314,6 +2287,8 @@ bot.on('callback_query', async (callbackQuery) => {
                                 selectedChannels = [];
                             }
                         }
+
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
                 }   // Flag to check if a message is being processed
                 else {
@@ -2321,21 +2296,27 @@ bot.on('callback_query', async (callbackQuery) => {
                     if (processingMessage) {
                         return; // Skip if a message is already being processed
                     }
-                
+
                     processingMessage = true;  // Set flag to indicate processing
-                
+
                     // Если только текст, отправляем текстовое сообщение с гиперссылкой
                     for (const channelId of channelsToSend) {
                         const fromChatId = msg.forward_from_chat ? msg.forward_from_chat.id : null;
                         const messageId = msg.forward_from_message_id || null;
                         const fromChatTitle = msg.forward_from_chat ? msg.forward_from_chat.title : 'Неизвестный источник';
-                        const channelTitle = channels[channelId];
-                        let channelUsername = await getChannelUsernameById(channelId);
-                
+                        const channel = channels[channelId];
+                        const channelTitle = channel.name;
+                        let channelUsername;
+                        if (channel.link) {
+                            channelUsername = channel.link;
+                        } else {
+                            channelUsername = await getChannelUsernameById(channelId);
+                        }
+
                         if (!channelUsername) {
                             console.error(`Канал с ID ${channelId} не имеет username.`);
                         }
-                
+
                         if (fromChatId) {
                             let fromChannelUsername = await getChannelUsernameById(fromChatId);
                             const fromChatLink = `https://t.me/${fromChannelUsername}/${messageId}`;
@@ -2361,23 +2342,25 @@ bot.on('callback_query', async (callbackQuery) => {
                             }
                             selectedChannels = [];
                         }
+
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
-                
+
                     processingMessage = false;  // Reset flag after processing
                 }
-                
-                
+
+
                 bot.removeListener('message', handleMediaMessage);
             }
         };
 
         bot.on('message', handleMediaMessage);
     } else if (
-        callbackData !== 'view_groups' && 
-        callbackData !== 'main_menu' && 
-        callbackData !== 'view_group' && 
-        callbackData !== 'create_group' && 
-        callbackData.split('_')[0] !== 'group' && 
+        callbackData !== 'view_groups' &&
+        callbackData !== 'main_menu' &&
+        callbackData !== 'view_group' &&
+        callbackData !== 'create_group' &&
+        callbackData.split('_')[0] !== 'group' &&
         callbackData !== 'confirm_create_group' &&
         callbackData.split('_')[0] !== 'view' &&
         callbackData.split('_')[0] !== 'add' &&
@@ -2385,23 +2368,22 @@ bot.on('callback_query', async (callbackQuery) => {
         callbackData.split('_')[0] !== 'settings' &&
         callbackData.split('_')[0] !== 'delete' &&
         callbackData.split('_')[0] !== 'select' &&
-        callbackData.split('_')[0] !== 'send'  &&
-        callbackData.split('_')[0] !== 'edit'  &&
+        callbackData.split('_')[0] !== 'send' &&
+        callbackData.split('_')[0] !== 'edit' &&
         callbackData.split('_')[0] !== 'remove' &&
         callbackData.startsWith !== 'toggle_channel_' &&
-        callbackData.split('_')[0] !== 'toggle' 
-    ) 
-    { 
+        callbackData.split('_')[0] !== 'toggle'
+    ) {
         const [channelId, page] = callbackData.split('_');
         const currentPage = parseInt(page) || 1; // Сохраняем текущую страницу
-    
+
         // Логика обработки выбора канала
         if (selectedChannels.includes(channelId)) {
             selectedChannels = selectedChannels.filter(id => id !== channelId); // Удаляем канал из выбранных
         } else {
             selectedChannels.push(channelId); // Добавляем канал в выбранные
         }
-    
+
         // Обновляем клавиатуру с учетом текущей страницы
         await bot.editMessageReplyMarkup({
             inline_keyboard: await generateChannelButtons(currentPage, ITEMS_PER_PAGE) // Передаем текущую страницу
@@ -2409,7 +2391,7 @@ bot.on('callback_query', async (callbackQuery) => {
             chat_id: chatId,
             message_id: callbackQuery.message.message_id
         });
-    
+
         return;
     }
 });
@@ -2439,23 +2421,8 @@ bot.onText(/\/groups/, async (msg) => {
         }
 
         // Пользователь найден и имеет полный доступ, загружаем каналы и группы из базы данных
-        const channelResult = await client.query('SELECT channel_id, channel_name FROM user_chanels');
-        channels = {};
-        for (const row of channelResult.rows) {
-            channels[row.channel_id] = row.channel_name;
-        }
-
-        const groupResult = await client.query('SELECT id, group_name FROM user_group');
-        groups = {};
-        for (const row of groupResult.rows) {
-            if (!groups[row.group_name]) {
-                groups[row.group_name] = [];
-            }
-            const groupChannels = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1', [row.id]);
-            for (const row1 of groupChannels.rows) {
-                groups[row.group_name].push(row1.channel_id);
-            }
-        }
+        channels = await get_channels(client);
+        groups = await get_groups(client);
 
         // Проверка на наличие каналов и отправка сообщения с кнопками
         const sentMessage = await bot.sendMessage(chatId, 'Что вы хотите сделать:', {
@@ -2482,3 +2449,62 @@ const commands = [
 ];
 
 bot.setMyCommands(commands);
+
+async function get_channels(client) {
+    let local_channels = {};
+
+    let limit = 10;
+    let offset = 0;
+
+    while (true) {
+        let result = await client.query('SELECT channel_id, channel_name, channel_link FROM user_chanels LIMIT $1 OFFSET $2', [limit, offset]);
+        if (result.rows.length === 0) {
+            break;
+        }
+        for (const row of result.rows) {
+            local_channels[row.channel_id] = {
+                name: row.channel_name,
+                link: row.channel_link,
+            };
+        }
+        offset += limit;
+    }
+    return local_channels
+}
+
+async function get_groups(client) {
+    let local_groups = {};
+
+    let limit = 10;
+    let offset = 0;
+
+    while (true) {
+        let result = await client.query('SELECT id, group_name FROM user_group LIMIT $1 OFFSET $2', [limit, offset]);
+        if (result.rows.length === 0) {
+            break;
+        }
+
+        for (const row of result.rows) {
+            if (!local_groups[row.group_name]) {
+                local_groups[row.group_name] = [];
+            }
+
+            let offset2 = 0;
+
+            while (true) {
+                let result2 = await client.query('SELECT channel_id FROM group_channel WHERE group_id = $1 LIMIT $2 OFFSET $3', [row.id, limit, offset2]);
+                if (result2.rows.length === 0) {
+                    break;
+                }
+                for (const row2 of result2.rows) {
+                    local_groups[row.group_name].push(row2.channel_id);
+                }
+                offset2 += limit;
+            }
+        }
+
+        offset += limit;
+    }
+
+    return local_groups
+}
